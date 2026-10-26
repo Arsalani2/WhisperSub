@@ -1,4 +1,5 @@
 # این پکیج‌ها در بخش ۱ نوت‌بوک با pip نصب می‌شوند (مخصوص Google Colab).
 # torch و google-colab به‌صورت پیش‌فرض در Colab موجودند.
-openai-whisper>=20231117
-ffmpeg-python
+# (فیکس P3-8) نسخه‌ها پین شدند تا نصب بین اجراهای مختلف یکسان بماند.
+openai-whisper==20250625
+ffmpeg-python==0.2.0
