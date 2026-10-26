@@ -1,4 +1,11 @@
 # -*- coding: utf-8 -*-
+# ==== WhisperSub Release Info (auto-generated) ====
+# WhisperSub — نسخه v1.0.4
+# تاریخ ساخت این ریلیز: 2026-10-26 | کامیت: c91e3d5
+# ریلیز: https://github.com/Arsalani2/WhisperSub/releases/tag/v1.0.4
+# این نوت‌بوک منبع اصلی پروژه است؛ فایل src/whispersub.py به‌صورت خودکار از روی همین فایل ساخته می‌شود.
+# ==== /WhisperSub Release Info ====
+
 """WhisperSub — رونویسی دسته‌ای ویدیو/صوت با OpenAI Whisper.
 
 این نوت‌بوک منبع اصلی پروژه است؛ فایل whispersub.py به‌صورت خودکار از روی همین
