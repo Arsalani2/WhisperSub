@@ -79,8 +79,8 @@
 - [x] **FB-22** — `"large-v3".capitalize()` = «Large-v3» — 🛠 حفظ رشتهٔ اصلی در نام/برچسب مدل — `280753340275afb40cd83c953368cc31ecfea901`
 - [x] **FB-23** — `empty_cache` در پایان هر فایل سربار دارد — 🛠 فقط بعد از OOM یا پایان بچ — `28258165e2598c4ae304bd0460669fb70ee69a99`
 - [x] **FB-24** — `torch.cuda.OutOfMemoryError` در torch قدیمی نیست → خود `except` کرش می‌کند — 🛠 `getattr(torch.cuda, "OutOfMemoryError", RuntimeError)` — `19dde50349b2ab88c46e71b0954d6eaf910d596a`
-- [ ] **FB-25** — `get_secret` با `except Exception` خطاهای واقعی را می‌بلعد — 🛠 تفکیک `SecretNotFoundError` از بقیه + هشدار
-- [ ] **FB-26** — باینری `ffmpeg/ffprobe` چک نمی‌شود (پکیج فقط wrapper است) — 🛠 `shutil.which("ffmpeg")` در ابتدا با پیام راهنما
+- [x] **FB-25** — `get_secret` با `except Exception` خطاهای واقعی را می‌بلعد — 🛠 تفکیک `SecretNotFoundError` از بقیه + هشدار — `ee632932b0864a4a22fe6c051729a0947aa3c30f`
+- [x] **FB-26** — باینری `ffmpeg/ffprobe` چک نمی‌شود (پکیج فقط wrapper است) — 🛠 `shutil.which` در ابتدا با پیام راهنما — `6f426b0812ca833fbc71b8371f5123ddf71ffce0`
 - [ ] **FB-27** — `tqdm` در دستور pip نیست (خارج Colab موجود نیست) — 🛠 افزودن به سلول نصب
 - [ ] **FB-28** — `TRANSCRIBE_LANGUAGE` بدون اعتبارسنجی است؛ خطا فقط بعد از لود مدل لو می‌شود — 🛠 چک عضویت در `whisper.tokenizer.LANGUAGES` در شروع
 - [ ] **FB-29** — `smtp.gmail.com:465` هاردکد — 🛠 سوییچ/Secret برای SMTP دیگر
@@ -107,7 +107,7 @@
 - 🔥 فوری (جلوی هر اجرا): — (FB-01، FB-02 و FB-04 رفع شدند)
 - ⚡ بالا: — (FB-07 و FB-08 و FB-09 رفع شدند)
 - 🟢 متوسط: — (FB-10 تا FB-13 رفع شدند)
-- 🔵 پایین: FB-25 تا FB-38 (FB-16 و FB-20 منتفی؛ FB-15 تا FB-19 و FB-21 تا FB-24 رفع شدند — همه در ریلیز v1.0.6)
+- 🔵 پایین: FB-27 تا FB-38 (FB-16 و FB-20 منتفی؛ FB-15 تا FB-19 و FB-21 تا FB-26 رفع شدند — FB-15 تا FB-24 در ریلیز v1.0.6)
 - قبل از هر پوش بدون `[skip ci]` مطمئن شوید ریلیز جدید می‌خواهید.
 
 > یادآوری: هر فیکس فقط در نوت‌بوک؛ کامیت‌های بدون `[skip ci]` ریلیز خودکار می‌سازند و فایل py در همان ریلیز به‌روز می‌شود.
