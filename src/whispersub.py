@@ -1,0 +1,572 @@
+# -*- coding: utf-8 -*-
+"""WhisperSub — رونویسی دسته‌ای ویدیو/صوت با OpenAI Whisper.
+
+این نوت‌بوک منبع اصلی پروژه است؛ فایل whispersub.py به‌صورت خودکار از روی همین
+فایل در ورکفلو ریلیز ساخته می‌شود. برای اجرا از Google Colab (ترجیحاً GPU)
+یا Jupyter استفاده کنید و بخش‌ها را به ترتیب اجرا کنید.
+"""
+
+# @title 🛠️ ۱. نصب پیش‌نیازها و کتابخانه‌های مورد نیاز
+# نکته: نسخه openai-whisper پین شد تا پشتیبانی مدل large-v3 تضمین شود
+# (large-v3 از نسخه 20231117 این پکیج اضافه شده است)
+!pip install -q "openai-whisper>=20231117" ffmpeg-python
+
+# @title ⚙️ ۲. پیکربندی محیط و فراخوانی مدل Whisper
+import os
+import torch
+import whisper
+from google.colab import drive
+
+# --- اتصال به Google Drive ---
+try:
+    drive.mount('/content/drive')
+except Exception as e:
+    raise RuntimeError(f"اتصال به Google Drive ناموفق بود: {e}\nلطفاً دوباره تلاش کنید و دسترسی لازم را تأیید نمایید.") from e
+
+# --- تشخیص دستگاه پردازشی ---
+device = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"[Info] دستگاه پردازشی: {device}")
+
+gpu_mem_gb = None
+if device == "cuda":
+    try:
+        gpu_name = torch.cuda.get_device_name(0)
+        gpu_mem_gb = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+        print(f"[Info] GPU: {gpu_name} | حافظه کل GPU: {gpu_mem_gb:.1f} GB")
+    except Exception:
+        pass
+else:
+    print("[Warning] GPU فعال نیست؛ پردازش روی CPU کندتر خواهد بود. (Runtime > Change runtime type > GPU)")
+
+WHISPER_MODEL_NAME = "large-v3"
+
+# --- تخمین تقریبی VRAM لازم برای هر مدل (fp16) — فقط جهت هشدار پیشگیرانه، غیرقطعی ---
+MODEL_VRAM_REQUIREMENTS_GB = {
+    "tiny": 1.5, "base": 1.5, "small": 3.0, "medium": 6.0,
+    "large": 11.0, "large-v2": 11.0, "large-v3": 11.0, "turbo": 7.0,
+}
+required_vram = MODEL_VRAM_REQUIREMENTS_GB.get(WHISPER_MODEL_NAME)
+if device == "cuda" and gpu_mem_gb is not None and required_vram is not None:
+    if gpu_mem_gb < required_vram:
+        print(f"[Warning] حافظه GPU ({gpu_mem_gb:.1f} GB) ممکن است برای مدل «{WHISPER_MODEL_NAME}» (نیاز تقریبی {required_vram:.1f} GB) کافی نباشد.")
+        print("[Warning] در صورت بروز خطای Out of Memory حین پردازش، همان فایل رد می‌شود و پردازش با فایل بعدی ادامه می‌یابد (جزئیات بیشتر در لاگ).")
+        print("[Warning] راه‌حل جایگزین در صورت تکرار خطا: مدل 'turbo' یا 'medium'، یا GPU با حافظه بیشتر (Colab Pro / A100 / L4).")
+
+# --- بارگذاری مدل Whisper ---
+try:
+    model = whisper.load_model(WHISPER_MODEL_NAME).to(device)
+except torch.cuda.OutOfMemoryError as e:
+    raise RuntimeError(
+        f"بارگذاری مدل «{WHISPER_MODEL_NAME}» به دلیل کمبود حافظه GPU ناموفق بود.\n"
+        f"پیشنهاد: مدل را به 'turbo' یا 'medium' تغییر دهید یا Runtime را ریست کرده و دوباره امتحان کنید.\n"
+        f"جزئیات خطا: {e}"
+    ) from e
+except Exception as e:
+    raise RuntimeError(f"بارگذاری مدل Whisper «{WHISPER_MODEL_NAME}» ناموفق بود: {e}") from e
+
+MODEL_LABEL = WHISPER_MODEL_NAME.capitalize()
+print(f"[Info] مدل Whisper «{MODEL_LABEL}» با موفقیت بارگذاری شد.")
+
+# --- مسیر محلی سشن برای ذخیره فایل‌های WAV استخراج‌شده ---
+# این مسیر فقط داخل سشن کولب است و هرگز به گوگل درایو منتقل نمی‌شود.
+SESSION_AUDIO_DIR = "/content/session_audio_cache"
+os.makedirs(SESSION_AUDIO_DIR, exist_ok=True)
+print(f"[Info] فایل‌های WAV هر پروژه در همین مسیر سشن کولب ذخیره می‌شوند (نه گوگل درایو): {SESSION_AUDIO_DIR}")
+
+# --- مسیر فایل لاگ کامل اجرای برنامه (در سشن کولب) ---
+LOG_FILE_PATH = "/content/whisper_processing_log.txt"
+print(f"[Info] گزارش کامل اجرای برنامه در این فایل ذخیره می‌شود: {LOG_FILE_PATH}")
+
+# --- فایل‌های ورودی و پوشهٔ خروجی هرکدام (فیکس P2-2: مسیرهای شخصی از ریپوی عمومی حذف شدند) ---
+# هر جفت به شکل (مسیر فایل ورودی، پوشهٔ خروجی در گوگل درایو) است. مثال:
+# input_output_pairs = [
+#     ('/content/drive/MyDrive/Videos/lesson1.mp4', '/content/drive/MyDrive/Subs/lesson1'),
+# ]
+# یا ساخت خودکار از روی یک پوشه (تابع build_pairs_from_folder در بخش ۳ تعریف می‌شود):
+# input_output_pairs = build_pairs_from_folder('/content/drive/MyDrive/Videos', '/content/drive/MyDrive/Subs')
+input_output_pairs = []  # مسیرهای خودتان را اینجا (یا با build_pairs_from_folder) تنظیم کنید
+
+# @title 📧 ۳. تنظیمات سامانه اطلاع‌رسانی ایمیل و اعتبارسنجی ورودی‌ها
+
+from google.colab import userdata
+import os
+import smtplib
+
+def get_secret(name):
+    """خواندن امن Secret از Colab؛ اگر وجود نداشت یا در دسترس نبود None برمی‌گرداند (فیکس P1-1)."""
+    try:
+        return userdata.get(name)
+    except Exception:
+        return None
+
+SENDER_EMAIL = get_secret('SENDER_EMAIL')
+SENDER_APP_PASSWORD = get_secret('SENDER_APP_PASSWORD')
+RECEIVER_EMAIL = get_secret('RECEIVER_EMAIL')
+
+def build_pairs_from_folder(source_folder, destination_root):
+    """برای هر فایل رسانه‌ای داخل source_folder یک زوج (ورودی، خروجی) در destination_root می‌سازد."""
+    media_ext = ('.mp4', '.mkv', '.avi', '.mov', '.webm', '.wmv', '.flv', '.ts',
+                 '.wav', '.mp3', '.flac', '.ogg', '.aac', '.m4a', '.amr', '.aiff', '.wma', '.alac')
+    pairs = []
+    if not os.path.exists(source_folder):
+        return pairs
+    for f in sorted(os.listdir(source_folder)):
+        full_path = os.path.join(source_folder, f)
+        if os.path.isfile(full_path) and f.lower().endswith(media_ext):
+            out_folder = os.path.join(destination_root, os.path.splitext(f)[0])
+            pairs.append((full_path, out_folder))
+    return pairs
+
+#input_output_pairs = [
+
+if SENDER_EMAIL and SENDER_APP_PASSWORD and RECEIVER_EMAIL:
+    print(f"[Info] ایمیل فرستنده تنظیم شد: {SENDER_EMAIL}")
+    print(f"[Info] ایمیل گیرنده: {RECEIVER_EMAIL}")
+    print("[Info] در حال آزمایش اتصال به سرور SMTP جیمیل...")
+    try:
+        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=20) as server:
+            server.login(SENDER_EMAIL, SENDER_APP_PASSWORD)
+        print("[Info] اتصال و احراز هویت ایمیل با موفقیت تأیید شد. ✅")
+    except smtplib.SMTPAuthenticationError as e:
+        print(f"[Warning] احراز هویت ایمیل ناموفق بود؛ App Password را بررسی کنید. جزئیات: {e}")
+    except Exception as e:
+        print(f"[Warning] آزمایش اتصال ایمیل ناموفق بود (پردازش ادامه می‌یابد اما ایمیل‌ها ممکن است ارسال نشوند): {e}")
+else:
+    print("[Warning] تنظیمات ایمیل در Secrets یافت نشد؛ برنامه بدون اعلان ایمیلی ادامه می‌یابد. برای فعال‌سازی، SENDER_EMAIL و SENDER_APP_PASSWORD و RECEIVER_EMAIL را در Secrets کولب اضافه کنید.")
+
+print(f"\n[Info] تعداد فایل‌های ثبت‌شده برای پردازش: {len(input_output_pairs)}")
+missing = [p for p, _ in input_output_pairs if not os.path.exists(p)]
+if missing:
+    print(f"[Warning] {len(missing)} فایل از لیست یافت نشدند (در زمان پردازش رد خواهند شد):")
+    for m in missing:
+        print(f"   - {m}")
+else:
+    print("[Info] همه فایل‌های ورودی موجود هستند. ✅")
+
+# @title 🚀 ۴. اجرای موتور پردازشگر Whisper (تبدیل گفتار به متن و تولید خروجی‌های چندگانه)
+
+import uuid
+import shutil
+import tempfile
+import time
+import zipfile
+import smtplib
+import traceback
+import ffmpeg
+from email.mime.text import MIMEText
+
+VIDEO_EXT = ('.mp4', '.mkv', '.avi', '.mov', '.webm', '.wmv', '.flv', '.ts')
+AUDIO_EXT = ('.wav', '.mp3', '.flac', '.ogg', '.aac', '.m4a', '.amr', '.aiff', '.wma', '.alac')
+
+# ============================================================
+# سیستم لاگینگ پیشرفته
+# ============================================================
+class ColabLogger:
+    ICONS = {"INFO": "ℹ️ ", "SUCCESS": "✅ ", "WARNING": "⚠️ ", "ERROR": "❌ ", "STEP": "🔹 "}
+
+    def __init__(self, log_file_path):
+        self.log_file_path = log_file_path
+        self.start_time = time.time()
+        try:
+            with open(self.log_file_path, "a", encoding="utf-8") as f:
+                f.write(f"\n{'='*70}\nشروع اجرای جدید در {time.strftime('%Y-%m-%d %H:%M:%S')}\n{'='*70}\n")
+        except Exception as e:
+            print(f"[Warning] امکان نوشتن فایل لاگ نبود: {e}")
+
+    def _elapsed(self):
+        e = time.time() - self.start_time
+        h, rem = divmod(e, 3600)
+        m, s = divmod(rem, 60)
+        return f"{int(h):02}:{int(m):02}:{int(s):02}"
+
+    def log(self, msg, level="INFO"):
+        icon = self.ICONS.get(level, "")
+        line = f"[{time.strftime('%H:%M:%S')}] [+{self._elapsed()}] {icon}{msg}"
+        print(line)
+        try:
+            with open(self.log_file_path, "a", encoding="utf-8") as f:
+                f.write(line + "\n")
+        except Exception:
+            pass
+
+    def info(self, msg): self.log(msg, "INFO")
+    def success(self, msg): self.log(msg, "SUCCESS")
+    def warning(self, msg): self.log(msg, "WARNING")
+    def error(self, msg): self.log(msg, "ERROR")
+    def step(self, msg): self.log(msg, "STEP")
+
+logger = ColabLogger(LOG_FILE_PATH)
+
+# ============================================================
+# توابع کمکی
+# ============================================================
+def format_srt_time(seconds):
+    seconds = max(seconds, 0)
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    ms = int((s - int(s)) * 1000)
+    return f"{int(h):02}:{int(m):02}:{int(s):02},{ms:03}"
+
+def probe_media_duration(media_path):
+    """مدت زمان دقیق فایل رسانه را با ffprobe برمی‌گرداند (ثانیه) یا None در صورت خطا."""
+    try:
+        info = ffmpeg.probe(media_path)
+        return float(info['format']['duration'])
+    except ffmpeg.Error as e:
+        stderr = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
+        logger.warning(f"عدم موفقیت ffprobe در تشخیص مدت‌زمان: {stderr.strip().splitlines()[-1] if stderr.strip() else e}")
+        return None
+    except (KeyError, ValueError) as e:
+        logger.warning(f"اطلاعات مدت‌زمان در خروجی ffprobe یافت نشد: {e}")
+        return None
+    except Exception as e:
+        logger.warning(f"خطای غیرمنتظره هنگام بررسی مدت‌زمان فایل: {e}")
+        return None
+
+def extract_audio(media_path, base_filename):
+    """صدا را استخراج و در مسیر سشن کولب (نه درایو) ذخیره می‌کند."""
+    if not os.path.exists(media_path):
+        raise FileNotFoundError(f"فایل ورودی یافت نشد: {media_path}")
+    if not media_path.lower().endswith(VIDEO_EXT + AUDIO_EXT):
+        raise ValueError(f"فرمت فایل پشتیبانی نمی‌شود: {media_path}")
+
+    safe_name = "".join(c for c in base_filename if c not in '\\/:*?"<>|').strip() or "audio"
+    audio_path = os.path.join(SESSION_AUDIO_DIR, f"{safe_name}.wav")
+    if os.path.exists(audio_path):
+        logger.warning("فایل صوتی هم‌نام از قبل در سشن کولب وجود دارد؛ نام جدید تولید می‌شود.")
+        counter = 1
+        while os.path.exists(audio_path):
+            audio_path = os.path.join(SESSION_AUDIO_DIR, f"{safe_name}_{counter}.wav")
+            counter += 1
+
+    try:
+        (
+            ffmpeg
+            .input(media_path)
+            .output(audio_path)
+            .overwrite_output()
+            .run(quiet=True, capture_stdout=True, capture_stderr=True)
+        )
+    except ffmpeg.Error as e:
+        stderr = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
+        raise RuntimeError(f"خطای ffmpeg در استخراج صدا: {stderr.strip().splitlines()[-1] if stderr.strip() else e}")
+
+    if not os.path.exists(audio_path) or os.path.getsize(audio_path) == 0:
+        raise RuntimeError("فایل صوتی استخراج‌شده خالی یا نامعتبر است.")
+
+    return audio_path
+
+def save_all_formats(segments, base_filename, work_dir, media_path, model_label, media_duration, audio_path, processing_seconds):
+    suffix = f"- Whisper [{model_label} Model]"
+    names = {
+        'srt': f"{base_filename}{suffix}.srt",
+        'txt': f"{base_filename}{suffix}.txt",
+        'txt_tl': f"{base_filename}{suffix}_timeline.txt",
+        'meta': f"{base_filename}_Metadata.txt",
+        'zip': f"{base_filename}_Whisper_Transcription.zip",
+    }
+    paths = {k: os.path.join(work_dir, v) for k, v in names.items()}
+
+    total_chars = 0
+    with open(paths['srt'], 'w', encoding='utf-8') as srt_f, \
+          open(paths['txt'], 'w', encoding='utf-8') as txt_f, \
+          open(paths['txt_tl'], 'w', encoding='utf-8') as txt_tl_f:
+        for i, seg in enumerate(segments):
+            start_s, end_s = seg['start'], seg['end']
+            text = seg['text'].strip()
+            line_no = i + 1
+            start_srt, end_srt = format_srt_time(start_s), format_srt_time(end_s)
+            srt_f.write(f"{line_no}\n{start_srt} --> {end_srt}\n{text}\n\n")
+            txt_f.write(f"{text}\n")
+            txt_tl_f.write(f"{line_no}\n{start_srt} --> {end_srt}\n{text}\n\n")
+            total_chars += len(text)
+
+    line_count = len(segments)
+    timeline_start = segments[0]['start'] if segments else 0.0
+    timeline_end = segments[-1]['end'] if segments else 0.0
+    total_words = sum(len(seg['text'].strip().split()) for seg in segments)
+    avg_chars_per_line = (total_chars / line_count) if line_count else 0
+    duration_for_report = media_duration if media_duration is not None else timeline_end
+
+    source_size_mb = os.path.getsize(media_path) / (1024 * 1024) if os.path.exists(media_path) else None
+    audio_size_mb = os.path.getsize(audio_path) / (1024 * 1024) if audio_path and os.path.exists(audio_path) else None
+
+    with open(paths['meta'], 'w', encoding='utf-8') as meta_f:
+        meta_f.write("========================================\n")
+        meta_f.write("        گزارش کامل متادیتای رونویسی\n")
+        meta_f.write("========================================\n\n")
+        meta_f.write(f"نام فایل ورودی: {os.path.basename(media_path)}\n")
+        meta_f.write(f"مسیر کامل فایل ورودی: {media_path}\n")
+        meta_f.write(f"حجم فایل ورودی: {(f'{source_size_mb:.2f} مگابایت' if source_size_mb is not None else 'نامشخص')}\n")
+        meta_f.write(f"حجم فایل صوتی استخراج‌شده: {(f'{audio_size_mb:.2f} مگابایت' if audio_size_mb is not None else 'نامشخص')}\n")
+        meta_f.write(f"مسیر فایل صوتی (فقط داخل سشن کولب - در درایو ذخیره نمی‌شود): {audio_path}\n\n")
+
+        meta_f.write("--- اطلاعات تایم‌لاین ---\n")
+        meta_f.write(f"شروع تایم‌لاین: {format_srt_time(timeline_start)}\n")
+        meta_f.write(f"پایان تایم‌لاین: {format_srt_time(timeline_end)}\n")
+        meta_f.write(f"کل مدت‌زمان ویدیو/رسانه: {format_srt_time(duration_for_report)}\n")
+        if media_duration is not None and abs(media_duration - timeline_end) > 1.0:
+            meta_f.write(f"توجه: {abs(media_duration - timeline_end):.1f} ثانیه اختلاف بین پایان تایم‌لاین و مدت واقعی رسانه وجود دارد (احتمالاً به دلیل حذف سکوت یا نویز).\n")
+        meta_f.write("\n")
+
+        meta_f.write("--- آمار متن ---\n")
+        meta_f.write(f"تعداد کل لاین‌ها (Segments): {line_count}\n")
+        meta_f.write(f"تعداد کل کاراکترها: {total_chars}\n")
+        meta_f.write(f"تعداد کل کلمات: {total_words}\n")
+        meta_f.write(f"میانگین کاراکتر در هر لاین: {avg_chars_per_line:.1f}\n\n")
+
+        meta_f.write("--- اطلاعات پردازش ---\n")
+        meta_f.write(f"مدل Whisper استفاده‌شده: {model_label}\n")
+        meta_f.write(f"دستگاه پردازشی: {device}\n")
+        meta_f.write("زبان رونویسی: en\n")
+        meta_f.write(f"زمان صرف‌شده برای پردازش این فایل: {processing_seconds:.1f} ثانیه\n")
+        meta_f.write(f"تاریخ و ساعت پردازش: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
+
+        meta_f.write("--- فایل‌های تولیدشده در این بسته ---\n")
+        for key in ['srt', 'txt', 'txt_tl']:
+            meta_f.write(f"- {names[key]}\n")
+
+    logger.step(f"متادیتای کامل تولید شد: {line_count} لاین | تایم‌لاین {format_srt_time(timeline_start)} تا {format_srt_time(timeline_end)} | کل مدت‌زمان {format_srt_time(duration_for_report)}")
+
+    with zipfile.ZipFile(paths['zip'], 'w') as zf:
+        for key, p in paths.items():
+            if key != 'zip' and os.path.exists(p):
+                zf.write(p, os.path.basename(p))
+
+    return {
+        'line_count': line_count,
+        'timeline_start': timeline_start,
+        'timeline_end': timeline_end,
+        'media_duration': duration_for_report,
+        'total_chars': total_chars,
+        'total_words': total_words,
+    }
+
+def send_email(subject, body, max_retries=3):
+    if not (SENDER_EMAIL and SENDER_APP_PASSWORD and RECEIVER_EMAIL):
+        logger.warning("اطلاعات ایمیل کامل نیست؛ این ایمیل ارسال نشد.")
+        return False
+
+    msg = MIMEText(body, 'plain', 'utf-8')
+    msg['Subject'] = subject
+    msg['From'] = SENDER_EMAIL
+    msg['To'] = RECEIVER_EMAIL
+
+    for attempt in range(1, max_retries + 1):
+        try:
+            with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=30) as server:
+                server.login(SENDER_EMAIL, SENDER_APP_PASSWORD)
+                server.sendmail(SENDER_EMAIL, [RECEIVER_EMAIL], msg.as_string())
+            logger.success(f"ایمیل «{subject}» ارسال شد.")
+            return True
+        except smtplib.SMTPAuthenticationError as e:
+            logger.error(f"خطای احراز هویت ایمیل (تلاش {attempt}/{max_retries}): App Password را بررسی کنید. {e}")
+        except smtplib.SMTPException as e:
+            logger.error(f"خطای SMTP هنگام ارسال ایمیل (تلاش {attempt}/{max_retries}): {e}")
+        except (OSError, TimeoutError) as e:
+            logger.error(f"خطای شبکه هنگام ارسال ایمیل (تلاش {attempt}/{max_retries}): {e}")
+        except Exception as e:
+            logger.error(f"خطای غیرمنتظره هنگام ارسال ایمیل (تلاش {attempt}/{max_retries}): {e}")
+
+        if attempt < max_retries:
+            wait_s = 5 * attempt
+            logger.info(f"تلاش مجدد برای ارسال ایمیل ظرف {wait_s} ثانیه...")
+            time.sleep(wait_s)
+
+    logger.error(f"ارسال ایمیل «{subject}» پس از {max_retries} تلاش ناموفق بود.")
+    return False
+
+# ============================================================
+# پردازش دسته‌ای اصلی
+# ============================================================
+def process_all(pairs):
+    total = len(pairs)
+    results = []
+    file_durations = []
+    success_count = 0
+    fail_count = 0
+    batch_start = time.time()
+
+    logger.info(f"====== شروع پردازش {total} فایل ======")
+
+    missing_files = [p for p, _ in pairs if not os.path.exists(p)]
+    if missing_files:
+        logger.warning(f"{len(missing_files)} فایل از {total} فایل ورودی یافت نشد و هنگام پردازش رد خواهند شد.")
+
+    for idx, (input_path, output_folder) in enumerate(pairs, start=1):
+        base_filename = os.path.splitext(os.path.basename(input_path))[0]
+        logger.info(f"------ فایل {idx}/{total} ({(idx-1)/total*100:.0f}٪ انجام‌شده) : {base_filename} ------")
+
+        if file_durations:
+            avg_time = sum(file_durations) / len(file_durations)
+            eta_seconds = avg_time * (total - idx + 1)
+            eta_h, eta_rem = divmod(eta_seconds, 3600)
+            eta_m, _ = divmod(eta_rem, 60)
+            logger.info(f"زمان تقریبی باقی‌مانده تا پایان کل عملیات: {int(eta_h)} ساعت و {int(eta_m)} دقیقه")
+
+        file_start = time.time()
+        work_dir = tempfile.mkdtemp()
+        audio_path = None
+        status = "نامشخص"
+        error_detail = ""
+        stats = {}
+        duration = 0.0
+
+        try:
+            if not os.path.exists(input_path):
+                raise FileNotFoundError(f"فایل ورودی یافت نشد: {input_path}")
+
+            logger.step("در حال بررسی مدت‌زمان دقیق فایل رسانه...")
+            media_duration = probe_media_duration(input_path)
+
+            logger.step("در حال استخراج صدا (WAV در سشن کولب ذخیره می‌شود)...")
+            audio_path = extract_audio(input_path, base_filename)
+            logger.success(f"صدا استخراج شد و در سشن کولب ذخیره ماند (نه درایو): {audio_path}")
+
+            logger.step("در حال رونویسی با Whisper (بسته به طول فایل ممکن است چند دقیقه طول بکشد)...")
+            result = model.transcribe(
+                audio_path,
+                language='en',
+                verbose=False,
+                fp16=(device == "cuda"),
+                condition_on_previous_text=False,
+            )
+            segments = result['segments']
+            if not segments:
+                raise ValueError("هیچ گفتاری در فایل شناسایی نشد.")
+            logger.success(f"رونویسی کامل شد: {len(segments)} لاین شناسایی شد.")
+
+            logger.step("در حال تولید فرمت‌های خروجی (SRT/TXT) و متادیتا...")
+            stats = save_all_formats(segments, base_filename, work_dir, input_path,
+                                      MODEL_LABEL, media_duration, audio_path,
+                                      time.time() - file_start)
+
+            logger.step(f"در حال انتقال فایل‌های خروجی به گوگل درایو: {output_folder}")
+            os.makedirs(output_folder, exist_ok=True)
+            for fname in os.listdir(work_dir):
+                dest_path = os.path.join(output_folder, fname)
+                if os.path.exists(dest_path):  # فیکس P2-1: اجرای مجدد روی خروجی موجود خطا نمی‌دهد
+                    os.remove(dest_path)
+                    logger.info(f"خروجی قبلی بازنویسی شد: {fname}")
+                shutil.move(os.path.join(work_dir, fname), dest_path)
+
+            duration = time.time() - file_start
+            file_durations.append(duration)
+            status = "موفق"
+            success_count += 1
+            logger.success(f"فایل «{base_filename}» با موفقیت پردازش شد. ({duration:.1f} ثانیه)")
+            results.append((input_path, f"موفق ({duration:.1f}s, {stats.get('line_count', '?')} لاین)"))
+
+        except FileNotFoundError as e:
+            duration = time.time() - file_start
+            status, error_detail = "ناموفق", str(e)
+            fail_count += 1
+            logger.error(f"فایل یافت نشد: {e}")
+            results.append((input_path, "ناموفق - فایل یافت نشد"))
+        except torch.cuda.OutOfMemoryError as e:
+            duration = time.time() - file_start
+            status, error_detail = "ناموفق", f"کمبود حافظه GPU (Out of Memory): {e}"
+            fail_count += 1
+            logger.error(f"خطای کمبود حافظه GPU حین پردازش «{base_filename}»؛ این فایل رد شد و پردازش با فایل بعدی ادامه می‌یابد.")
+            try:
+                torch.cuda.empty_cache()
+                logger.info("حافظه CUDA پاک‌سازی شد.")
+            except Exception:
+                pass
+            results.append((input_path, "ناموفق - کمبود حافظه GPU (OOM)"))
+        except (ValueError, RuntimeError) as e:
+            duration = time.time() - file_start
+            status, error_detail = "ناموفق", str(e)
+            fail_count += 1
+            logger.error(f"خطا در پردازش فایل: {e}")
+            results.append((input_path, f"ناموفق - {e}"))
+        except Exception as e:
+            duration = time.time() - file_start
+            status, error_detail = "ناموفق", f"{type(e).__name__}: {e}"
+            fail_count += 1
+            logger.error(f"خطای غیرمنتظره: {type(e).__name__}: {e} (جزئیات کامل در فایل لاگ ذخیره شد)")
+            try:
+                with open(LOG_FILE_PATH, 'a', encoding='utf-8') as f:
+                    f.write(traceback.format_exc() + "\n")
+            except Exception:
+                pass
+            results.append((input_path, f"ناموفق - {type(e).__name__}"))
+        finally:
+            shutil.rmtree(work_dir, ignore_errors=True)
+            if device == "cuda":
+                try:
+                    torch.cuda.empty_cache()
+                except Exception:
+                    pass
+
+        logger.info(f"خلاصه تا این لحظه: {success_count} موفق، {fail_count} ناموفق از {idx} فایل بررسی‌شده")
+
+        per_file_body = (
+            f"گزارش پردازش فایل {idx} از {total}\n"
+            f"{'=' * 40}\n"
+            f"نام فایل: {base_filename}\n"
+            f"وضعیت: {status}\n"
+        )
+        if status == "موفق":
+            per_file_body += (
+                f"مدت‌زمان پردازش: {duration:.1f} ثانیه\n"
+                f"تعداد لاین‌ها: {stats.get('line_count', '-')}\n"
+                f"شروع تایم‌لاین: {format_srt_time(stats.get('timeline_start', 0))}\n"
+                f"پایان تایم‌لاین: {format_srt_time(stats.get('timeline_end', 0))}\n"
+                f"کل مدت‌زمان رسانه: {format_srt_time(stats.get('media_duration', 0))}\n"
+                f"مسیر خروجی در گوگل درایو: {output_folder}\n"
+                f"مسیر فایل WAV (فقط سشن کولب): {audio_path}\n"
+            )
+        else:
+            per_file_body += f"جزئیات خطا: {error_detail}\n"
+        per_file_body += f"\nپیشرفت کلی پروژه: {idx}/{total} فایل ({idx/total*100:.0f}٪)\n"
+
+        send_email(f"{'✅' if status == 'موفق' else '❌'} گزارش فایل {idx}/{total}: {base_filename}", per_file_body)
+
+    total_time = time.time() - batch_start
+    th, trem = divmod(total_time, 3600)
+    tm, ts = divmod(trem, 60)
+
+    summary_header = (
+        f"گزارش نهایی پردازش دسته‌ای\n"
+        f"{'=' * 40}\n"
+        f"تعداد کل فایل‌ها: {total}\n"
+        f"موفق: {success_count}   |   ناموفق: {fail_count}\n"
+        f"زمان کل پردازش: {int(th)} ساعت {int(tm)} دقیقه {int(ts)} ثانیه\n"
+    )
+    if file_durations:
+        avg_all = sum(file_durations) / len(file_durations)
+        summary_header += f"میانگین زمان پردازش هر فایل: {avg_all:.1f} ثانیه\n"
+    summary_header += f"\n{'-' * 40}\nجزئیات هر فایل:\n{'-' * 40}\n"
+    summary = summary_header + "\n".join(f"{os.path.basename(p)}: {s}" for p, s in results)
+
+    logger.info("====== پردازش تمام فایل‌ها به پایان رسید ======")
+    logger.info(f"موفق: {success_count} | ناموفق: {fail_count} | زمان کل: {int(th):02}:{int(tm):02}:{int(ts):02}")
+
+    try:
+        cache_files = os.listdir(SESSION_AUDIO_DIR)
+        cache_size_mb = sum(os.path.getsize(os.path.join(SESSION_AUDIO_DIR, f)) for f in cache_files) / (1024 * 1024)
+        logger.info(f"فایل‌های WAV این سشن ({len(cache_files)} فایل، مجموعاً {cache_size_mb:.1f} مگابایت) در مسیر زیر باقی ماندند و به درایو منتقل نمی‌شوند:")
+        logger.info(f"  {SESSION_AUDIO_DIR}")
+        logger.warning("این فایل‌ها با پایان یا ریست‌شدن سشن کولب برای همیشه پاک خواهند شد.")
+    except Exception:
+        pass
+
+    send_email(f"📊 گزارش نهایی پردازش دسته‌ای ({success_count}/{total} موفق)", summary)
+
+    return results
+
+try:
+    process_all(input_output_pairs)
+except KeyboardInterrupt:
+    logger.error("پردازش توسط کاربر متوقف شد.")
+    send_email("⛔ پردازش متوقف شد", "پردازش دسته‌ای توسط کاربر متوقف شد (KeyboardInterrupt).")
+except Exception as e:
+    logger.error(f"خطای بحرانی و غیرمنتظره در سطح اصلی برنامه: {e}")
+    try:
+        with open(LOG_FILE_PATH, 'a', encoding='utf-8') as f:
+            f.write(traceback.format_exc() + "\n")
+    except Exception:
+        pass
+    send_email("🚨 خطای بحرانی در اجرای برنامه", f"برنامه با خطای غیرمنتظره متوقف شد:\n{e}\n\nجزئیات کامل خطا در فایل لاگ ذخیره شد.")
+    raise

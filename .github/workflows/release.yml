@@ -1,0 +1,67 @@
+name: Release WhisperSub
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-whispersub
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: محاسبه نسخه بعدی (1.0.x)
+        id: next
+        run: |
+          CUR="$(tr -d '[:space:]' < VERSION)"
+          PATCH="$(printf '%s' "$CUR" | awk -F. 'NF >= 3 && $3 ~ /^[0-9]+$/ { print $3 }')"
+          PATCH="${PATCH:-0}"
+          NEW="1.0.$((PATCH + 1))"
+          echo "version=$NEW" >> "$GITHUB_OUTPUT"
+          echo "نسخه ریلیز: $NEW (قبلی: $CUR)"
+
+      - name: درج اطلاعات ریلیز در نوت‌بوک و تولید src/whispersub.py
+        run: |
+          python3 .github/scripts/build_release.py "${{ steps.next.outputs.version }}" "$GITHUB_SHA"
+
+      - name: ثبت نسخه جدید و فایل تولیدشده [skip ci]
+        run: |
+          echo "${{ steps.next.outputs.version }}" > VERSION
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add VERSION notebook/whispersub.ipynb src/whispersub.py
+          git commit -m "chore(release): v${{ steps.next.outputs.version }} [skip ci]"
+          git push
+
+      - name: ساخت ریلیز و پیوست دو فایل
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          VERSION="${{ steps.next.outputs.version }}"
+          SHORT_SHA="${GITHUB_SHA::7}"
+          NOTES=$(cat <<EOF
+          ## WhisperSub v${VERSION}
+
+          - نسخه: ${VERSION}
+          - تاریخ: $(date +'%Y-%m-%d')
+          - کامیت: ${SHORT_SHA}
+
+          فایل‌های پیوست این ریلیز:
+          - «notebook/whispersub.ipynb» — منبع اصلی پروژه (کامنت اطلاعات ریلیز در ابتدای فایل)
+          - «src/whispersub.py» — تولیدشده به‌صورت خودکار از روی نوت‌بوک
+
+          اطلاعات نسخه و ریلیز به‌صورت کامنت در ابتدای هر دو فایل درج شده است.
+          EOF
+          )
+          gh release create "v${VERSION}" notebook/whispersub.ipynb src/whispersub.py \
+            --title "WhisperSub v${VERSION}" \
+            --notes "$NOTES"
