@@ -5,12 +5,14 @@
 کارها:
 ۱) بلوک «اطلاعات ریلیز» را در بالای سلول کد نوت‌بوک درج/به‌روزرسانی می‌کند (idempotent)
 ۲) فایل src/whispersub.py را از روی نوت‌بوک (منبع اصلی پروژه) تولید می‌کند
+۳) فایل requirements.txt را با خط pip نوت‌بوک همگام می‌کند (تک‌منبع: نوت‌بوک)
 
 استفاده: python3 build_release.py <version> <commit_sha>
 """
 
 import json
 import re
+import shlex
 import sys
 from datetime import date
 
@@ -20,6 +22,17 @@ REPO_URL = "https://github.com/Arsalani2/WhisperSub"
 
 BEGIN = "# ==== WhisperSub Release Info (auto-generated) ===="
 END = "# ==== /WhisperSub Release Info ===="
+
+REQUIREMENTS = "requirements.txt"
+
+# هدر ثابت requirements.txt — این فایل از این به بعد تولیدی است و دستی ادیت نمی‌شود
+REQ_HEADER = (
+    "# این فایل به‌صورت خودکار در ورکفلو ریلیز از روی خط pip نوت‌بوک ساخته می‌شود؛ دستی ادیت نشود.\n"
+    "# این پکیج‌ها در بخش ۱ نوت‌بوک نصب می‌شوند (مخصوص Google Colab).\n"
+    "# torch و google-colab به‌صورت پیش‌فرض در Colab موجودند.\n"
+)
+
+PIP_LINE_RE = re.compile(r"^\s*!\s*pip\s+install\s+(.+)$", re.MULTILINE)
 
 
 def build_header(version, commit):
@@ -31,6 +44,20 @@ def build_header(version, commit):
         "# این نوت‌بوک منبع اصلی پروژه است؛ فایل " + SCRIPT + " به‌صورت خودکار از روی همین فایل ساخته می‌شود.",
         END,
     ])
+
+
+def sync_requirements(code):
+    """فایل requirements.txt را از روی خط pip نوت‌بوک بازسازی می‌کند (تک‌منبع: نوت‌بوک)."""
+    m = PIP_LINE_RE.search(code)
+    if not m:
+        raise SystemExit("خط pip install در نوت‌بوک پیدا نشد.")
+    tokens = shlex.split(m.group(1))
+    pkgs = [t for t in tokens if not t.startswith("-")]
+    if not pkgs:
+        raise SystemExit("هیچ پکیجی در خط pip نوت‌بوک پیدا نشد.")
+    with open(REQUIREMENTS, "w", encoding="utf-8") as f:
+        f.write(REQ_HEADER + "\n".join(pkgs) + "\n")
+    print("[Info] " + REQUIREMENTS + " با خط pip نوت‌بوک همگام شد: " + ", ".join(pkgs))
 
 
 def main():
@@ -74,6 +101,9 @@ def main():
             parts.append("".join(cell["source"]).rstrip("\n"))
     with open(SCRIPT, "w", encoding="utf-8") as f:
         f.write("\n\n\n".join(parts) + "\n")
+
+    # همگام‌سازی requirements.txt با خط pip نوت‌بوک
+    sync_requirements(src)
 
     print("[Info] اطلاعات ریلیز v" + version + " در " + NOTEBOOK + " درج شد و " + SCRIPT + " ساخته شد.")
 
