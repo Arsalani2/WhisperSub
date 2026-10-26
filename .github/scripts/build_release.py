@@ -18,7 +18,7 @@ from datetime import date
 
 NOTEBOOK = "notebook/whispersub.ipynb"
 SCRIPT = "src/whispersub.py"
-REPO_URL = "https://github.com/Arsalani2/WhisperSub"
+REPO_URL = "https://github.com/Personalmo/WhisperSub"
 
 BEGIN = "# ==== WhisperSub Release Info (auto-generated) ===="
 END = "# ==== /WhisperSub Release Info ===="
