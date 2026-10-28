@@ -4,8 +4,8 @@
 
 **رونویسی دسته‌ای ویدیو و صوت به متن با OpenAI Whisper (large-v3)** — نوت‌بوکی آماده برای اجرا در **Google Colab**
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Arsalani2/WhisperSub/blob/main/notebook/whispersub.ipynb)
-[![نسخه](https://img.shields.io/github/v/release/Arsalani2/WhisperSub.svg?style=flat-square&label=%D9%86%D8%B3%D8%AE%D9%87)](https://github.com/Arsalani2/WhisperSub/releases/latest)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/Personalmo/WhisperSub/blob/main/notebook/whispersub.ipynb)
+[![نسخه](https://img.shields.io/github/v/release/Personalmo/WhisperSub.svg?style=flat-square&label=%D9%86%D8%B3%D8%AE%D9%87)](https://github.com/Personalmo/WhisperSub/releases/latest)
 [![Python](https://img.shields.io/badge/Python-3.10%2B-3776AB?style=flat-square&logo=python&logoColor=white)](https://www.python.org/)
 [![مجوز](https://img.shields.io/badge/%D9%85%D8%AC%D9%88%D8%B2-MIT-yellow?style=flat-square)](LICENSE)
 
@@ -25,8 +25,9 @@ WhisperSub یک نوت‌بوک Jupyter است که چندین فایل ویدی
 | 🔊 | استخراج خودکار صدا با ffmpeg — کش WAV فقط در سشن Colab می‌ماند و به درایو نمی‌رود |
 | 📄 | خروجی SRT + TXT (با و بدون تایم‌لاین) + متادیتا + بستهٔ ZIP برای هر فایل |
 | ☁️ | ذخیرهٔ خروجی‌ها در Google Drive |
-| 📧 | اعلان ایمیلی (Gmail SMTP) بعد از هر فایل + گزارش نهایی |
+| 📧 | اعلان ایمیلی (Gmail SMTP) — پیش‌فرض: فایل‌های ناموفق + گزارش نهایی (سوییچ `EMAIL_PER_FILE`) |
 | 🛡️ | ادامهٔ پردازش در صورت خطا؛ تخمین زمان باقی‌مانده؛ لاگ کامل اجرا |
+| 📱 | حالت UI/UX موبایلی (الگوی TeleScrape): فرم تنظیمات Colab (اسلایدر/دراپ‌داون) + شکستن خطوط خروجی به عرض صفحهٔ موبایل + لاگ کم‌جزئیات پیش‌فرض |
 
 ## 📂 ساختار مخزن
 
@@ -53,7 +54,7 @@ WhisperSub/
 |---|---|
 | [`notebook/whispersub.ipynb`](notebook/whispersub.ipynb) | **منبع اصلی** — نوت‌بوک اجرایی پروژه |
 | [`src/whispersub.py`](src/whispersub.py) | نسخهٔ اسکریپتی، تولیدشدهٔ خودکار از نوت‌بوک |
-| [`docs/bug.md`](docs/bug.md) | باگ‌های مستندشده (P1 تا P4) |
+| [`docs/bug.md`](docs/bug.md) | باگ‌های مستندشده و سابقهٔ فیکس‌ها |
 | [`VERSION`](VERSION) | نسخهٔ فعلی پروژه (`1.0.x`) |
 | [`.github/workflows/release.yml`](.github/workflows/release.yml) | ریلیز خودکار در هر پوش به `main` |
 
@@ -65,7 +66,7 @@ WhisperSub/
 
 - در Colab: **File → Open notebook → GitHub** و آدرس این مخزن، یا کلیک روی دکمهٔ «Open in Colab» در بالا
 - Runtime را روی GPU بگذارید: **Runtime → Change runtime type → GPU**
-- بخش‌های نوت‌بوک را به ترتیب (۱ تا ۴) اجرا کنید
+- بخش‌های نوت‌بوک را به ترتیب (۱ تا ۵) اجرا کنید
 
 > 💡 مدل `large-v3` حدود **۱۱ گیگابایت** VRAM می‌خواهد. اگر GPU کم‌حافظه دارید، `WHISPER_MODEL_NAME` را به `turbo` یا `medium` تغییر دهید.
 
@@ -123,8 +124,10 @@ input_output_pairs = build_pairs_from_folder(source_folder, destination_root)
 
 | تنظیم | محل | توضیح |
 |---|---|---|
-| `WHISPER_MODEL_NAME` | بخش ۲ | مدل Whisper (`tiny` … `large-v3`، `turbo`) |
-| `language='en'` | بخش ۴ (`model.transcribe`) | زبان گفتار؛ برای زبان دیگر تغییر دهید یا حذف کنید تا خودکار تشخیص داده شود |
+| `WHISPER_MODEL_NAME` | بخش ۲ (فرم) | مدل Whisper (`tiny` … `large-v3`، `turbo`) |
+| `TRANSCRIBE_LANGUAGE` | بخش ۲ (فرم) | زبان گفتار (کد دوحرفی Whisper مثل `en` و `fa`) |
+| `UI_WIDTH` | بخش ۲ (فرم) | عرض شکستن خطوط خروجی کنسول برای موبایل (۲۴–۶۰؛ پیش‌فرض ۳۴) |
+| `VERBOSE_LOGS` | بخش ۲ (فرم) | `False` = فقط رویدادهای مهم در کنسول (پیام‌های گام‌به‌گام فقط در فایل لاگ)؛ `True` = لاگ کامل |
 | `condition_on_previous_text=False` | بخش ۴ | جلوگیری از تکرار/هذیان مدل در سکوت یا نویز طولانی |
 | `SESSION_AUDIO_DIR` | بخش ۲ | مسیر کش WAV در سشن Colab (پس از پایان سشن پاک می‌شود) |
 
@@ -140,10 +143,10 @@ input_output_pairs = build_pairs_from_folder(source_folder, destination_root)
 
 ## 🐞 باگ‌های شناخته‌شده
 
-گزارش کامل ۲۶ باگ مستندشده (P1 تا P4) در [`docs/bug.md`](docs/bug.md) است:
+گزارش کامل باگ‌های مستندشده (چرخه‌های P تا NB، نسخهٔ ۶) در [`docs/bug.md`](docs/bug.md) است:
 
-- ✅ ۱۲ مورد فیکس یا منتفی شده — از جمله ترمیم JSON نامعتبر نوت‌بوک، حذف خروجی‌های VTT/ASS/PDF/DOCX، حذف دوتایی‌شدن منابع `py`/`ipynb`، فیکس P1-1 (کرش بدون Secrets ایمیل)، P2-2 (حذف مسیرهای شخصی) و P2-1 (خطای اجرای مجدد)
-- ⬜ ۱۷ مورد باز — همه در سطح P3/P4؛ بدون مورد بحرانی یا بالا
+- ✅ همهٔ باگ‌های چرخه‌های ۱ تا ۶ رفع یا منتفی شده‌اند — سابقهٔ کامل با هش‌های فیکس در `docs/bug.md` و تاریخچهٔ کامیت‌ها
+- 🧪 چرخهٔ ۵ و ۶ در اجرای واقعی Colab (بچ ۸ فایلی، ۲۰۲۶-۱۰-۲۷) با موفقیت تست شدند
 
 ## 🤝 قواعد توسعه
 
@@ -157,3 +160,4 @@ input_output_pairs = build_pairs_from_folder(source_folder, destination_root)
 این پروژه تحت مجوز [MIT](LICENSE) منتشر شده است.
 
 </div>
+
