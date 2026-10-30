@@ -16,6 +16,12 @@ import shlex
 import sys
 from datetime import date
 
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 NOTEBOOK = "notebook/whispersub.ipynb"
 SCRIPT = "src/whispersub.py"
 REPO_URL = "https://github.com/Personalmo/WhisperSub"
@@ -94,11 +100,18 @@ def main():
         json.dump(nb, f, ensure_ascii=False, indent=1)
         f.write("\n")
 
-    # ساخت src/whispersub.py از روی سلول‌های کد نوت‌بوک
+    # ساخت src/whispersub.py از روی سلول‌های کد نوت‌بوک (فیکس NB-20: کامنت کردن دستورات شل Colab مانند !pip)
     parts = []
     for cell in nb["cells"]:
         if cell["cell_type"] == "code":
-            parts.append("".join(cell["source"]).rstrip("\n"))
+            cell_lines = []
+            for line in "".join(cell["source"]).split("\n"):
+                if line.strip().startswith("!"):
+                    # فیکس NB-20: دستورات شل Colab در اسکریپت پایتون کامنت می‌شوند تا سینتکس معتبر باشد
+                    cell_lines.append("# " + line + "  # Colab shell magic")
+                else:
+                    cell_lines.append(line)
+            parts.append("\n".join(cell_lines).rstrip("\n"))
     with open(SCRIPT, "w", encoding="utf-8") as f:
         f.write("\n\n\n".join(parts) + "\n")
 
