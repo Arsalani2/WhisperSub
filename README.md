@@ -111,9 +111,9 @@ input_output_pairs = build_pairs_from_folder(source_folder, destination_root)
 
 ```
 📁 <پوشهٔ خروجی>
-├── <name>- Whisper [Large-v3 Model].srt          ← زیرنویس استاندارد
-├── <name>- Whisper [Large-v3 Model].txt           ← متن ساده (بدون تایم‌لاین)
-├── <name>- Whisper [Large-v3 Model]_timeline.txt  ← متن ساده (با تایم‌لاین)
+├── <name>- Whisper [large-v3 Model].srt          ← زیرنویس استاندارد
+├── <name>- Whisper [large-v3 Model].txt           ← متن ساده (بدون تایم‌لاین)
+├── <name>- Whisper [large-v3 Model]_timeline.txt  ← متن ساده (با تایم‌لاین)
 ├── <name>_Metadata.txt                            ← گزارش کامل متادیتا
 └── <name>_Whisper_Transcription.zip               ← بستهٔ همهٔ خروجی‌ها
 ```
@@ -128,6 +128,9 @@ input_output_pairs = build_pairs_from_folder(source_folder, destination_root)
 | `TRANSCRIBE_LANGUAGE` | بخش ۲ (فرم) | زبان گفتار (کد دوحرفی Whisper مثل `en` و `fa`) |
 | `UI_WIDTH` | بخش ۲ (فرم) | عرض شکستن خطوط خروجی کنسول برای موبایل (۲۴–۶۰؛ پیش‌فرض ۳۴) |
 | `VERBOSE_LOGS` | بخش ۲ (فرم) | `False` = فقط رویدادهای مهم در کنسول (پیام‌های گام‌به‌گام فقط در فایل لاگ)؛ `True` = لاگ کامل |
+| `KEEP_SESSION_WAVS` / `KEEP_FAILED_WAVS` | بخش ۲ (فرم) | نگه‌داشتن WAV سشن پس از پردازش موفق/ناموفق (پیش‌فرض: حذف؛ فقط برای دیباگ True کنید) |
+| `ABORT_AFTER_SYSTEMIC_FAILURES` | بخش ۲ (فرم) | توقف بچ پس از N شکست زیرساختی متوالی مثل دیسک پر یا قطع درایو (۰ = خاموش) |
+| `SMTP_HOST` / `SMTP_PORT` | بخش ۲ | سرور ایمیل SMTP (پیش‌فرض: Gmail `smtp.gmail.com:465`) |
 | `condition_on_previous_text=False` | بخش ۴ | جلوگیری از تکرار/هذیان مدل در سکوت یا نویز طولانی |
 | `SESSION_AUDIO_DIR` | بخش ۲ | مسیر کش WAV در سشن Colab (پس از پایان سشن پاک می‌شود) |
 
@@ -143,10 +146,11 @@ input_output_pairs = build_pairs_from_folder(source_folder, destination_root)
 
 ## 🐞 باگ‌های شناخته‌شده
 
-گزارش کامل باگ‌های مستندشده (چرخه‌های P تا NB، نسخهٔ ۶) در [`docs/bug.md`](docs/bug.md) است:
+گزارش کامل باگ‌های مستندشده (چرخه‌های P تا NB، نسخهٔ ۷) در [`docs/bug.md`](docs/bug.md) است:
 
-- ✅ همهٔ باگ‌های چرخه‌های ۱ تا ۶ رفع یا منتفی شده‌اند — سابقهٔ کامل با هش‌های فیکس در `docs/bug.md` و تاریخچهٔ کامیت‌ها
+- ✅ همهٔ باگ‌های چرخه‌های ۱ تا ۷ (تا NB-29) رفع یا منتفی شده‌اند — سابقهٔ کامل با هش‌های فیکس در `docs/bug.md` و تاریخچهٔ کامیت‌ها
 - 🧪 چرخهٔ ۵ و ۶ در اجرای واقعی Colab (بچ ۸ فایلی، ۲۰۲۶-۱۰-۲۷) با موفقیت تست شدند
+- ⚠️ فیکس‌های چرخهٔ ۷ (NB-20…NB-29) فقط تست محلی دارند؛ اولین اجرای واقعی بعدی عملاً تست همان چرخه است
 
 ## 🤝 قواعد توسعه
 
