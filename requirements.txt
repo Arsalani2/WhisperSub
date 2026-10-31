@@ -3,3 +3,4 @@
 # torch و google-colab به‌صورت پیش‌فرض در Colab موجودند.
 openai-whisper==20250625
 ffmpeg-python==0.2.0
+tqdm==4.70.1

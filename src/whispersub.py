@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 # ==== WhisperSub Release Info (auto-generated) ====
-# WhisperSub — نسخه v1.0.6
-# تاریخ ساخت این ریلیز: 2026-10-26 | کامیت: 19dde50
-# ریلیز: https://github.com/Personalmo/WhisperSub/releases/tag/v1.0.6
+# WhisperSub — نسخه v1.0.7
+# تاریخ ساخت این ریلیز: 2026-10-31 | کامیت: 8804b8b
+# ریلیز: https://github.com/Personalmo/WhisperSub/releases/tag/v1.0.7
 # این نوت‌بوک منبع اصلی پروژه است؛ فایل src/whispersub.py به‌صورت خودکار از روی همین فایل ساخته می‌شود.
 # ==== /WhisperSub Release Info ====
 
@@ -16,12 +16,17 @@
 # @title 🛠️ ۱. نصب پیش‌نیازها و کتابخانه‌های مورد نیاز
 # نکته (فیکس P3-8): نسخه‌ها پین شدند تا نصب بین اجراهای مختلف یکسان بماند
 # (large-v3 از نسخه 20231117 این پکیج اضافه شده است؛ نسخهٔ پین‌شده جدیدترین نسخهٔ پایدار است)
-!pip install -q "openai-whisper==20250625" "ffmpeg-python==0.2.0"
+# فیکس FB-27: tqdm صریحاً نصب می‌شود — پچ پیشرفت P4-6 مستقیماً به آن وابسته است و
+# بیرون از Colab ممکن است از قبل نصب نباشد (فقط به وابستگی انتقالی whisper اتکا نکنید)
+# فیکس NB-07: tqdm هم مثل سایر پکیج‌ها پین شد (آخرین نسخهٔ پایدار PyPI) — مانکی‌پچ
+# پیشرفت (P4-6/FB-09) به رفتار tqdm وابسته است و پیشرفتِ بستهٔ پین‌نشده بین اجراها
+# ممکن است تغییر کند؛ requirements.txt در ریلیز بعدی خودکار sync می‌شود
+# !pip install -q "openai-whisper==20250625" "ffmpeg-python==0.2.0" "tqdm==4.70.1"  # Colab shell magic
 
 # فیکس FB-21: قبلاً شکست !pip بی‌صدا رد می‌شد و اولین نشانه، ModuleNotFoundError
 # گمراه‌کننده در سلول بعدی بود؛ حالا نصب بلافاصله پس از pip بررسی می‌شود
 import importlib
-for _pkg in ("whisper", "ffmpeg"):
+for _pkg in ("whisper", "ffmpeg", "tqdm", "torch"):  # فیکس NB-13: tqdm (FB-27) و torch هم مستقیم import می‌شوند
     try:
         importlib.import_module(_pkg)
     except ImportError as e:
@@ -29,11 +34,12 @@ for _pkg in ("whisper", "ffmpeg"):
             f"نصب پیش‌نیازها ناموفق بود (بستهٔ {_pkg}): {e}\n"
             "خروجی pip در همین سلول را بررسی کنید (شبکه یا تضاد وابستگی‌ها) و سلول را دوباره اجرا کنید."
         ) from e
-print("[Info] نصب پیش‌نیازها با موفقیت بررسی شد (whisper, ffmpeg).")
+print("[Info] نصب پیش‌نیازها با موفقیت بررسی شد (whisper, ffmpeg, tqdm, torch).")
 
 
 # @title ⚙️ ۲. پیکربندی محیط و فراخوانی مدل Whisper
 import os
+import shutil  # فیکس FB-26: چک وجود باینری ffmpeg/ffprobe در PATH
 import torch
 import whisper
 
@@ -41,6 +47,7 @@ import whisper
 # خودِ except با AttributeError کرش می‌کرد؛ getattr با عقب‌افتادگی به RuntimeError
 # (در نسخه‌های جدید، پدرِ همین OOM است) این شکاف را می‌بندد
 OOM_ERROR_TYPE = getattr(torch.cuda, "OutOfMemoryError", RuntimeError)
+OOM_FALLBACK_ACTIVE = OOM_ERROR_TYPE is RuntimeError  # فیکس NB-14: روی torch قدیمی OOM کلاس ندارد
 
 # --- فیکس FB-03: وابستگی سخت به google.colab حذف شد؛ تشخیص محیط اجرا ---
 # در Colab رفتار دقیقاً مثل قبل است؛ خارج از Colab (Jupyter محلی و…) برنامه بدون درایو و
@@ -77,10 +84,28 @@ if device == "cuda":
 else:
     print("[Warning] GPU فعال نیست؛ پردازش روی CPU کندتر خواهد بود. (Runtime > Change runtime type > GPU)")
 
-WHISPER_MODEL_NAME = "large-v3"
+# --- فیکس FB-26: پکیج ffmpeg-python فقط wrapper است؛ خودِ باینری جدا نصب می‌شود ---
+# (در Colab از قبل موجود است؛ در محیط محلی اگر نباشد، اولین خطا گمراه‌کننده است)
+_missing_bins = [b for b in ("ffmpeg", "ffprobe") if shutil.which(b) is None]
+if _missing_bins:
+    print(f"[Warning] باینری {', '.join(_missing_bins)} در PATH یافت نشد؛ استخراج/بررسی صدا شکست خواهد خورد.")
+    print("[Warning] راهنمای نصب: اوبونتو: sudo apt install ffmpeg | مک: brew install ffmpeg | ویندوز: بستهٔ static-build و افزودن به PATH.")
+else:
+    print("[Info] باینری‌های ffmpeg و ffprobe موجود هستند. ✅")
+
+WHISPER_MODEL_NAME = "large-v3"  # @param ["tiny", "base", "small", "medium", "large", "large-v2", "large-v3", "turbo"]
 
 # --- زبان رونویسی (فیکس P3-2: به‌جای هاردکد 'en'؛ در transcribe و متادیتا از همین ثابت استفاده می‌شود) ---
-TRANSCRIBE_LANGUAGE = "en"
+TRANSCRIBE_LANGUAGE = "en"  # @param {type:"string"}
+
+# فیکس FB-28: اعتبارسنجی زبان در شروع (نه وسط بچ بعد از لود مدل) — کد اشتباه مثل
+# «farsi» یا «EN» همین‌جا با پیام روشن و فهرست کدهای معتبر متوقف می‌شود
+TRANSCRIBE_LANGUAGE = str(TRANSCRIBE_LANGUAGE).lower()
+if TRANSCRIBE_LANGUAGE not in whisper.tokenizer.LANGUAGES:
+    raise ValueError(
+        f"TRANSCRIBE_LANGUAGE «{TRANSCRIBE_LANGUAGE}» در کدهای زبان Whisper نیست؛ "
+        f"کدهای معتبر: {', '.join(sorted(whisper.tokenizer.LANGUAGES))}"
+    )
 
 # --- تخمین تقریبی VRAM لازم برای هر مدل (fp16) — فقط جهت هشدار پیشگیرانه، غیرقطعی ---
 MODEL_VRAM_REQUIREMENTS_GB = {
@@ -102,8 +127,14 @@ if device == "cpu" and WHISPER_MODEL_NAME in ("large", "large-v2", "large-v3", "
 
 # --- بارگذاری مدل Whisper ---
 try:
-    model = whisper.load_model(WHISPER_MODEL_NAME).to(device)
+    # فیکس FB-38: پارامتر device به خودِ load_model داده می‌شود؛ انتقال دوم (.to)
+    # فقط سربار و ابهام بود — whisper.load_model خودش روی همان device لود می‌کند
+    model = whisper.load_model(WHISPER_MODEL_NAME, device=device)
 except OOM_ERROR_TYPE as e:  # فیکس FB-24
+    # فیکس NB-14: روی torch قدیمی (fallback = RuntimeError) هر RuntimeError این شاخه را می‌گیرد؛
+    # بدون نشانهٔ OOM در پیام، ادعای «کمبود حافظه GPU» غلط است و پیام generic می‌آید
+    if OOM_FALLBACK_ACTIVE and not ("out of memory" in str(e).lower() or "cuda" in str(e).lower()):
+        raise RuntimeError(f"بارگذاری مدل Whisper «{WHISPER_MODEL_NAME}» ناموفق بود: {e}") from e
     raise RuntimeError(
         f"بارگذاری مدل «{WHISPER_MODEL_NAME}» به دلیل کمبود حافظه GPU ناموفق بود.\n"
         f"پیشنهاد: مدل را به 'turbo' یا 'medium' تغییر دهید یا Runtime را ریست کرده و دوباره امتحان کنید.\n"
@@ -126,16 +157,35 @@ print(f"[Info] فایل‌های WAV هر پروژه در همین مسیر سش
 
 # --- فیکس P3-4: WAV سشنِ فایلِ موفق پس از پایان همان فایل حذف می‌شود تا دیسک سشن پر نشود ---
 # برای نگه‌داشتن WAVها در طول سشن این سوییچ را True کنید.
-KEEP_SESSION_WAVS = False
+KEEP_SESSION_WAVS = False  # @param {type:"boolean"}
 
 # --- فیکس FB-04: WAV سشنِ فایل‌های ناموفق (OOM و…) نیز حذف می‌شود تا با جمع‌شدنشان دیسک سشن پر نشود ---
 # فقط برای دیباگ (بررسی صوت فایل خطاخورده) این سوییچ را True کنید.
-KEEP_FAILED_WAVS = False
+KEEP_FAILED_WAVS = False  # @param {type:"boolean"}
+
+# --- حالت UI/UX موبایلی (طبق الگوی پروژهٔ TeleScrape): خطوط خروجی کنسول به ---
+# --- عرض صفحهٔ موبایل شکسته می‌شوند (اسلایدر زیر) و تنظیمات کلیدی به فرم Colab ---
+# --- (اسلایدر/دراپ‌داونِ قابل استفاده روی موبایل) تبدیل شده‌اند ---
+UI_WIDTH = 34  # @param {type:"slider", min:24, max:60, step:1}
+
+# --- لاگ کم‌جزئیات: پیش‌فرض فقط رویدادهای مهم در کنسول چاپ می‌شود (شروع/پایان هر ---
+# --- فایل، ETA، هشدارها و خطاها)؛ پیام‌های گام‌به‌گام (🔹) فقط در فایل لاگ ---
+# --- ذخیره می‌شوند و هیچ اطلاعاتی از دست نمی‌رود. True = لاگ کامل مثل قبل ---
+VERBOSE_LOGS = False  # @param {type:"boolean"}
+
+# --- فیکس NB-12: توقف بچ بعد از N شکست سیستمی متوالی (قطع درایو / دیسک پر) ---
+# خطاهای زیرساختیِ پشت‌سرهم نشانهٔ مشکل محیط است؛ ادامهٔ بچ فقط GPU را هدر می‌دهد
+# و به‌ازای هر فایل یک ایمیل خطا می‌فرستد. 0 = خاموش (رفتار قبلی)
+ABORT_AFTER_SYSTEMIC_FAILURES = 3  # @param {type:"integer"}
 
 # --- فیکس FB-10: ایمیل به‌ازای هر فایل ریسک rate-limit جیمیل و در بچ‌های بزرگ ---
 # تأخیر ناشی از retry دارد؛ پیش‌فرض فقط فایل‌های ناموفق ایمیل می‌شوند و گزارش نهایی
 # همیشه ارسال می‌شود. برای ایمیل موفق‌ها هم (رفتار قبلی) این سوییچ را True کنید.
-EMAIL_PER_FILE = False
+EMAIL_PER_FILE = False  # @param {type:"boolean"}
+
+# --- فیکس FB-29: هاست/پورت SMTP هاردکد بود؛ برای سرویس ایمیل غیر Gmail قابل تنظیم ---
+SMTP_HOST = "smtp.gmail.com"  # مثلاً smtp.mail.yahoo.com یا smtp.office365.com
+SMTP_PORT = 465  # SSL
 
 # --- فیکس FB-05: پوشهٔ بازیابی سشن — نسخهٔ امن خروجی‌ها قبل از انتقال به مقصد ---
 # اگر انتقال وسط کار شکست بخورد، خروجی‌های آماده از این پوشه قابل دسترسی‌اند و با
@@ -156,12 +206,48 @@ print(f"[Info] در پایان هر پردازش دسته‌ای، نسخهٔ پ
 VIDEO_EXT = ('.mp4', '.mkv', '.avi', '.mov', '.webm', '.wmv', '.flv', '.ts')
 AUDIO_EXT = ('.wav', '.mp3', '.flac', '.ogg', '.aac', '.m4a', '.amr', '.aiff', '.wma', '.alac')
 
+
+# --- فیکس NB-24: تابع استاندارد برای حذف کاراکترهای غیرمجاز فایل‌سیستم ---
+def sanitize_filename(name, fallback="media"):
+    """حذف کاراکترهای ممنوعه در فایل‌سیستم‌های ویندوز و Google Drive FUSE (\/:*?"<>|)
+    تا نام فایل‌ها و پوشه‌ها بدون خطا ساخته شوند."""
+    cleaned = "".join(c for c in name if c not in r'\/:*?"<>|').strip().rstrip(". ")
+    return cleaned or fallback
+
+# --- ساخت خودکار لیست فایل‌ها از روی یک پوشه (فیکس NB-22: تعریف در بخش ۲) ---
+def build_pairs_from_folder(source_folder, destination_root):
+    """برای هر فایل رسانه‌ای داخل source_folder یک زوج (ورودی، خروجی) در destination_root می‌سازد.
+    فیکس NB-22: تعریف در بخش ۲ تا قبل از مقداردهی input_output_pairs در دسترس باشد (رفع NameError).
+    فیکس NB-24: پاک‌سازی کاراکترهای غیرمجاز در نام پوشهٔ خروجی.
+    فیکس NB-25: نرمال‌سازی مسیرها و حذف فاصله‌ها/کوتیشن‌های احتمالی."""
+    pairs = []
+    seen_outputs = set()
+    source_folder = str(source_folder).strip().strip("'\"")
+    destination_root = str(destination_root).strip().strip("'\"")
+    if not os.path.isdir(source_folder):
+        print(f"[Warning] پوشهٔ منبع یافت نشد یا پوشه نیست: {source_folder} — لیست فایل‌ها خالی خواهد بود.")
+        return pairs
+    for f in sorted(os.listdir(source_folder)):
+        full_path = os.path.join(source_folder, f)
+        if os.path.isfile(full_path) and f.lower().endswith(VIDEO_EXT + AUDIO_EXT):
+            stem = sanitize_filename(os.path.splitext(f)[0], fallback="media")  # فیکس NB-24
+            out_folder = os.path.normpath(os.path.join(destination_root, stem))  # فیکس NB-25
+            unique_n = 2
+            while out_folder in seen_outputs:
+                out_folder = os.path.normpath(os.path.join(destination_root, f"{stem}_{unique_n}"))
+                unique_n += 1
+            seen_outputs.add(out_folder)
+            pairs.append((full_path, out_folder))
+    if not pairs:
+        print(f"[Warning] هیچ فایل رسانه‌ای با پسوندهای پشتیبانی‌شده در «{source_folder}» پیدا نشد (فقط خود پوشه بررسی می‌شود، نه زیرپوشه‌ها).")
+    return pairs
+
 # --- فایل‌های ورودی و پوشهٔ خروجی هرکدام (فیکس P2-2: مسیرهای شخصی از ریپوی عمومی حذف شدند) ---
 # هر جفت به شکل (مسیر فایل ورودی، پوشهٔ خروجی در گوگل درایو) است. مثال:
 # input_output_pairs = [
 #     ('/content/drive/MyDrive/Videos/lesson1.mp4', '/content/drive/MyDrive/Subs/lesson1'),
 # ]
-# یا ساخت خودکار از روی یک پوشه (تابع build_pairs_from_folder در بخش ۳ تعریف می‌شود):
+# یا ساخت خودکار از روی یک پوشه (با تابع build_pairs_from_folder تعریف‌شده در بالا):
 # input_output_pairs = build_pairs_from_folder('/content/drive/MyDrive/Videos', '/content/drive/MyDrive/Subs')
 input_output_pairs = []  # مسیرهای خودتان را اینجا (یا با build_pairs_from_folder) تنظیم کنید
 
@@ -177,72 +263,90 @@ except ImportError:
     userdata = None
 
 def get_secret(name):
-    """خواندن امن Secret؛ در Colab از Secrets و در محیط محلی از متغیرهای محیطی (None اگر موجود نبود) — فیکس P1-1 + FB-03."""
+    """خواندن امن Secret؛ در Colab از Secrets و در محیط محلی از متغیرهای محیطی (None اگر موجود نبود) — فیکس P1-1 + FB-03.
+
+    فیکس FB-25: «نبودِ Secret» (SecretNotFoundError) حالت عادیِ تنظیم‌نشدن است و مثل
+    قبل None برمی‌گردد؛ اما خطاهای واقعی (مثل خطای دسترسی) دیگر بی‌صدا بلعیده نمی‌شوند."""
     if userdata is None:
         return os.environ.get(name)
     try:
         return userdata.get(name)
-    except Exception:
+    except Exception as e:
+        # فیکس FB-25: فقط «Secret یافت نشد» حالت عادی است؛ سایر خطاها هشدار می‌گیرند.
+        # (SecretNotFoundError در همهٔ نسخه‌های colab به‌صورت عمومی export نشده و
+        # چک با نامِ رده انجام می‌شود)
+        if type(e).__name__ == "SecretNotFoundError":
+            return None
+        print(f"[Warning] خطا در خواندن Secret «{name}»: {type(e).__name__}: {e}")
         return None
 
 SENDER_EMAIL = get_secret('SENDER_EMAIL')
 SENDER_APP_PASSWORD = get_secret('SENDER_APP_PASSWORD')
 RECEIVER_EMAIL = get_secret('RECEIVER_EMAIL')
 
-def build_pairs_from_folder(source_folder, destination_root):
-    """برای هر فایل رسانه‌ای داخل source_folder یک زوج (ورودی، خروجی) در destination_root می‌سازد."""
-    # فیکس P4-2: از ثابت واحد بخش ۲ به‌جای media_ext محلیِ تکراری استفاده می‌شود
-    pairs = []
-    seen_outputs = set()  # فیکس FB-06: نام‌های پوشهٔ خروجی یکتا ساخته می‌شوند
-    # فیکس P4-7: لیست خالی دیگر بی‌صدا برنمی‌گردد؛ علت (پوشهٔ ناموجود / نبود فایل رسانه‌ای) هشدار داده می‌شود
-    if not os.path.isdir(source_folder):
-        print(f"[Warning] پوشهٔ منبع یافت نشد یا پوشه نیست: {source_folder} — لیست فایل‌ها خالی خواهد بود.")
-        return pairs
-    for f in sorted(os.listdir(source_folder)):
-        full_path = os.path.join(source_folder, f)
-        if os.path.isfile(full_path) and f.lower().endswith(VIDEO_EXT + AUDIO_EXT):
-            stem = os.path.splitext(f)[0]
-            out_folder = os.path.join(destination_root, stem)
-            # فیکس FB-06: فایل‌های هم‌نام با پسوند متفاوت (مثل a.mp4 و a.mkv) قبلاً به یک
-            # پوشهٔ خروجی می‌رفتند و خروجی یکی بی‌صدا بازنویسی می‌شد؛ حالا نام یکتا می‌سازیم (_2، _3، …)
-            unique_n = 2
-            while out_folder in seen_outputs:
-                out_folder = os.path.join(destination_root, f"{stem}_{unique_n}")
-                unique_n += 1
-            seen_outputs.add(out_folder)
-            pairs.append((full_path, out_folder))
-    if not pairs:
-        print(f"[Warning] هیچ فایل رسانه‌ای با پسوندهای پشتیبانی‌شده در «{source_folder}» پیدا نشد (فقط خود پوشه بررسی می‌شود، نه زیرپوشه‌ها).")
-    return pairs
+# فیکس NB-22: تابع build_pairs_from_folder جهت دسترسی آسان هنگام مقداردهی ورودی‌ها به بخش ۲ منتقل شد.
+# برای حفظ سازگاری معکوس، در صورتی که نیاز باشد تابع از بخش ۲ در دسترس است.
 
-def validate_pairs(pairs):
-    """فیکس P4-7: اعتبارسنجی ساختار pairs؛ لیست جفت‌های معتبر را برمی‌گرداند و موارد نامعتبر را هشدار می‌دهد."""
+def validate_pairs(pairs, quiet=False):
+    """فیکس P4-7: اعتبارسنجی ساختار pairs؛ جفت‌های معتبر + علت‌های ردشدگی را برمی‌گرداند.
+
+    فیکس NB-06: پارامتر quiet — فراخوان دومِ اعتبارسنجی داخل process_all (تلاش
+    مجدد سلول ۵) دیگر هشدارهای تکراری چاپ نمی‌کند؛ پیام‌ها یک‌بار در precheck سلول ۳ کافی است.
+    فیکس FB-32: خروجی (valid, rejects) — علت‌های کوتاه ردشدگی برای گزارش نهایی.
+    فیکس NB-08: پسوند ناشناخته دیگر با هشدارِ گمراه‌کننده در بچ نمی‌ماند؛ رد قطعی می‌شود.
+    """
     if not isinstance(pairs, (list, tuple)):
         raise TypeError(f"input_output_pairs باید لیستی از جفت‌های (مسیر ورودی، پوشهٔ خروجی) باشد؛ نوع دریافتی: {type(pairs).__name__}")
     valid = []
+    rejects = []  # فیکس FB-32: علت‌های کوتاه ردشدگی برای گزارش نهایی
     seen_outputs = {}  # فیکس FB-06: پوشهٔ خروجی -> (شمارهٔ آیتم، نام فایل ورودی)
     for i, item in enumerate(pairs, start=1):
         if not (isinstance(item, (list, tuple)) and len(item) == 2 and all(isinstance(x, str) and x.strip() for x in item)):
-            print(f"[Warning] آیتم شمارهٔ {i} در input_output_pairs معتبر نیست (باید جفت دو رشتهٔ غیرخالی باشد) و رد می‌شود: {item!r}")
+            if not quiet:  # فیکس NB-06: پیام فقط در precheck سلول ۳ چاپ می‌شود
+                print(f"[Warning] آیتم شمارهٔ {i} در input_output_pairs معتبر نیست (باید جفت دو رشتهٔ غیرخالی باشد) و رد می‌شود: {item!r}")
+            rejects.append(f"آیتم {i}: ساختار نامعتبر")  # فیکس FB-32
             continue
         in_path, out_folder = item
+        # فیکس NB-25: پاک‌سازی فاصله‌های اضافی و کوتیشن‌های احتمالی اطراف مسیرها و نرمال‌سازی مسیر خروجی
+        in_path = in_path.strip().strip("'\"")
+        out_folder = os.path.normpath(out_folder.strip().strip("'\""))
         if not in_path.lower().endswith(VIDEO_EXT + AUDIO_EXT):
-            print(f"[Warning] پسوند فایل «{os.path.basename(in_path)}» جزو پسوندهای پشتیبانی‌شده نیست؛ در صورت ناموفق بودن ffmpeg، فایل رد می‌شود.")
+            # فیکس NB-08: قبلاً فقط هشدار داده می‌شد و جفت در بچ می‌ماند؛ پیام هم به ffmpeg
+            # نسبت داده می‌شد درحالی‌که extract_audio خودش در چک پسوند ValueError می‌دهد و
+            # تنها نتیجه‌اش slot بچ + ایمیل خطا برای چیزی بود که از قبل معلوم بود. رد قطعی:
+            if not quiet:  # فیکس NB-06
+                print(f"[Warning] پسوند فایل «{os.path.basename(in_path)}» پشتیبانی نمی‌شود؛ این جفت رد شد.")
+            rejects.append(f"آیتم {i}: پسوند پشتیبانی نمی‌شود ({os.path.basename(in_path)})")  # فیکس FB-32 + NB-08
+            continue
         if out_folder in seen_outputs:
             # فیکس FB-06: قبلاً فقط هشدار داده می‌شد و خروجی فایل قبلی بی‌صدا بازنویسی می‌شد؛ حالا آیتم تکراری رد می‌شود
             prev_i, prev_name = seen_outputs[out_folder]
-            print(f"[Warning] پوشهٔ خروجی «{out_folder}» تکراری است (آیتم‌های {prev_i} و {i}؛ فایل‌های «{prev_name}» و «{os.path.basename(in_path)}»)؛ این آیتم رد می‌شود تا خروجی فایل قبلی بازنویسی نشود.")
+            if not quiet:  # فیکس NB-06
+                print(f"[Warning] پوشهٔ خروجی «{out_folder}» تکراری است (آیتم‌های {prev_i} و {i}؛ فایل‌های «{prev_name}» و «{os.path.basename(in_path)}»)؛ این آیتم رد می‌شود تا خروجی فایل قبلی بازنویسی نشود.")
+            rejects.append(f"آیتم {i}: پوشهٔ خروجی تکراری «{out_folder}»")  # فیکس FB-32
             continue
         seen_outputs[out_folder] = (i, os.path.basename(in_path))
         valid.append((in_path, out_folder))
-    return valid
+    return valid, rejects  # فیکس FB-32: علت‌های ردشدگی برای گزارش نهایی
+
+def ensure_output_folder(out_folder):
+    """فیکس NB-02: پوشهٔ خروجی را می‌سازد و قابل‌نوشتن بودن آن را با write-test واقعی بررسی می‌کند (False = نامعتبر)."""
+    test_file = os.path.join(out_folder, ".whispersub_write_test")
+    try:
+        os.makedirs(out_folder, exist_ok=True)
+        with open(test_file, "w") as f:
+            f.write("test")
+        os.remove(test_file)
+        return True
+    except OSError:
+        return False
 
 if SENDER_EMAIL and SENDER_APP_PASSWORD and RECEIVER_EMAIL:
     print(f"[Info] ایمیل فرستنده تنظیم شد: {SENDER_EMAIL}")
     print(f"[Info] ایمیل گیرنده: {RECEIVER_EMAIL}")
-    print("[Info] در حال آزمایش اتصال به سرور SMTP جیمیل...")
+    print(f"[Info] در حال آزمایش اتصال به سرور SMTP ({SMTP_HOST})...")
     try:
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=20) as server:
+        with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=20) as server:  # فیکس FB-29
             server.login(SENDER_EMAIL, SENDER_APP_PASSWORD)
         print("[Info] اتصال و احراز هویت ایمیل با موفقیت تأیید شد. ✅")
     except smtplib.SMTPAuthenticationError as e:
@@ -256,7 +360,9 @@ else:
 # (رشته یا جفت نامعتبر) در unpackingِ «p, _» کرش می‌کرد و آمار شامل مواردی بود که
 # validate_pairs رد می‌کند. حالا اول validate_pairs اجرا می‌شود و precheck فقط روی
 # لیست معتبر انجام می‌شود؛ نتیجهٔ معتبر جای لیست خام را می‌گیرد.
-input_output_pairs = validate_pairs(input_output_pairs)
+# فیکس FB-32: علت‌های ردشدگی در متغیر ماژول‌سطح نگه داشته می‌شود تا در گزارش نهایی
+# ایمیل هم بیاید؛ کاربری که فقط ایمیل نهایی را می‌خواند از کم‌بودنِ تعداد بی‌خبر نماند
+input_output_pairs, PAIRS_REJECTS = validate_pairs(input_output_pairs)
 if not input_output_pairs:
     print("[Warning] هیچ جفت معتبری برای پردازش باقی نمانده است؛ در صورت نیاز input_output_pairs را تنظیم کنید (یا از build_pairs_from_folder استفاده کنید).")
 else:
@@ -268,11 +374,19 @@ else:
             print(f"   - {m}")
     else:
         print("[Info] همه فایل‌های ورودی موجود هستند. ✅")
+    # فیکس NB-02: پوشهٔ خروجی نامعتبر/غیرقابل‌نوشتن پیش از هر پردازشی گزارش می‌شود (fail-fast)
+    bad_outputs = [out for _, out in input_output_pairs if not ensure_output_folder(out)]
+    if bad_outputs:
+        print(f"[Warning] {len(bad_outputs)} پوشهٔ خروجی قابل ساخت/نوشتن نیست (جفت‌های مربوطه در شروع پردازش رد می‌شوند):")
+        for b in bad_outputs:
+            print(f"   - {b}")
 
 
 # @title 🚀 ۴. اجرای موتور پردازشگر Whisper (تبدیل گفتار به متن و تولید خروجی‌های چندگانه)
 
+import math  # فیکس NB-29: بررسی امن NaN در محاسبات زمانی
 import collections  # فیکس FB-19: deque برای read_log_tail بدون بارگذاری کل لاگ
+import textwrap  # حالت موبایلی: شکستن خطوط لاگ کنسول به عرض UI_WIDTH (الگوی say در TeleScrape)
 import shutil
 import tempfile
 import time
@@ -291,9 +405,13 @@ from email.mime.text import MIMEText
 class ColabLogger:
     ICONS = {"INFO": "ℹ️ ", "SUCCESS": "✅ ", "WARNING": "⚠️ ", "ERROR": "❌ ", "STEP": "🔹 "}
 
-    def __init__(self, log_file_path):
+    def __init__(self, log_file_path, verbose=False, wrap_width=0):
         self.log_file_path = log_file_path
         self.start_time = time.time()
+        # حالت موبایلی/کم‌جزئیات: wrap_width>0 خطوط کنسول را به عرض موبایل می‌شکند و
+        # verbose=True لاگ کامل قدیم را برمی‌گرداند (فایل لاگ در هر حالتی کامل نوشته می‌شود)
+        self.verbose = verbose
+        self.wrap_width = int(wrap_width) if wrap_width else 0
         try:
             with open(self.log_file_path, "a", encoding="utf-8") as f:
                 f.write(f"\n{'='*70}\nشروع اجرای جدید در {time.strftime('%Y-%m-%d %H:%M:%S')}\n{'='*70}\n")
@@ -315,57 +433,120 @@ class ColabLogger:
         try:
             if os.path.exists(self.log_file_path) and os.path.getsize(self.log_file_path) > self.LOG_ROTATE_MAX_BYTES:
                 rotated = self.log_file_path + ".1"
-                if os.path.exists(rotated):
-                    os.remove(rotated)
-                os.rename(self.log_file_path, rotated)
+                # فیکس FB-34: exists/remove/rename سه‌مرحله‌ای race داشت — اگر remove
+                # خطا بخورد، except بیرونی کل بلوک را رد می‌کند و rename بی‌صدا انجام
+                # نمی‌شود (چرخش از کار می‌افتد بدون هیچ نشانه)؛ os.replace بازنویسی
+                # اتمیک است (لینوکس + ویندوز) و جفت exists/remove کلاً حذف می‌شود
+                os.replace(self.log_file_path, rotated)
         except OSError:
             pass
 
-    def log(self, msg, level="INFO"):
+    def _console(self, line):
+        """چاپ کنسول با شکستن خط به عرض موبایل (الگوی say در TeleScrape):
+        توکن‌های بی‌قاعده (مسیرهای طولانی) هارد‌وریز می‌شوند و بعد textwrap.fill —
+        در دسکتاپ (wrap_width خاموش) رفتار قبلی یعنی print ساده حفظ می‌شود."""
+        if not (self.wrap_width and self.wrap_width >= 20):
+            print(line)
+            return
+        w = self.wrap_width
+        for ln in line.split("\n"):
+            if not ln:
+                print()
+                continue
+            if len(ln) > w:
+                pieces = []
+                for tok in ln.split(" "):
+                    while len(tok) > w:
+                        pieces.append(tok[:w])
+                        tok = tok[w:]
+                    pieces.append(tok)
+                ln = " ".join(pieces)
+            print(textwrap.fill(ln, w, break_long_words=False, break_on_hyphens=False))
+
+    def log(self, msg, level="INFO", force=False):
         icon = self.ICONS.get(level, "")
-        line = f"[{time.strftime('%H:%M:%S')}] [+{self._elapsed()}] {icon}{msg}"
-        print(line)
+        # فایل لاگ همیشه با فرمت کامل نوشته می‌شود (حتی در حالت کم‌جزئیات) تا
+        # بکاپ درایو و دنبالهٔ ایمیل نهایی (فیکس P3-9) کامل بمانند
+        full_line = f"[{time.strftime('%H:%M:%S')}] [+{self._elapsed()}] {icon}{msg}"
         try:
             self._rotate_if_needed()  # فیکس FB-13: چرخش ساده پیش از هر نوشتن
             with open(self.log_file_path, "a", encoding="utf-8") as f:
-                f.write(line + "\n")
+                f.write(full_line + "\n")
         except Exception:
             pass
+        # حالت کم‌جزئیات (پیش‌فرض): پیام‌های گام‌به‌گام (🔹) فقط در فایل لاگ
+        # ذخیره می‌شوند و در کنسول چاپ نمی‌شوند؛ پیشوند کنسول هم کوتاه می‌شود
+        # تا روی موبایل جا برای خود پیام باقی بماند. force=True پیام گامیِ مهم
+        # (مثل شروع رونویسی) را در هر حالتی نشان می‌دهد
+        if level == "STEP" and not self.verbose and not force:
+            return
+        if self.verbose:
+            self._console(full_line)
+        else:
+            self._console(f"[{time.strftime('%H:%M')}] {icon}{msg}")
 
     def info(self, msg): self.log(msg, "INFO")
     def success(self, msg): self.log(msg, "SUCCESS")
     def warning(self, msg): self.log(msg, "WARNING")
     def error(self, msg): self.log(msg, "ERROR")
-    def step(self, msg): self.log(msg, "STEP")
+    def step(self, msg, force=False): self.log(msg, "STEP", force=force)
 
-logger = ColabLogger(LOG_FILE_PATH)
+logger = ColabLogger(LOG_FILE_PATH, verbose=VERBOSE_LOGS, wrap_width=UI_WIDTH)
 
 # ============================================================
 # توابع کمکی
 # ============================================================
 def format_srt_time(seconds):
-    # فیکس P3-1: گردکردن صحیح (به‌جای truncate) برای حذف خطای تا ۱ms در تایم‌استمپ
+    # فیکس P3-1 + NB-29: گردکردن صحیح + محافظت در برابر None و NaN
+    if seconds is None or (isinstance(seconds, float) and math.isnan(seconds)):
+        seconds = 0.0
     total_ms = max(0, int(round(seconds * 1000)))
     h, rem_ms = divmod(total_ms, 3600000)
     m, rem_ms = divmod(rem_ms, 60000)
     s, ms = divmod(rem_ms, 1000)
+    # فیکس FB-35: استاندارد SRT ساعتِ دو رقمی است؛ برای مدت‌های ۱۰۰+ ساعته سه‌رقمی
+    # شدنِ ساعت خروجی را غیراستاندارد می‌کند — در سقف 99:59:59,999 محدود می‌شود
+    if h > 99:
+        h, m, s, ms = 99, 59, 59, 999
+        logger.warning("مدت رسانه از ۹۹ ساعت بیشتر است؛ تایم‌استمپ SRT در سقف استاندارد cap شد")
     return f"{int(h):02}:{int(m):02}:{int(s):02},{ms:03}"
 
 def probe_media_duration(media_path):
-    """مدت زمان دقیق فایل رسانه را با ffprobe برمی‌گرداند (ثانیه) یا None در صورت خطا."""
+    """مدت زمان دقیق فایل رسانه را با ffprobe برمی‌گرداند (ثانیه) یا None در صورت خطا.
+
+    فیکس FB-36: برخی فرمت‌های صوتی مدت را فقط در streams[0].duration یا
+    streams[0].tags['DURATION'] می‌دهند؛ زنجیرهٔ fallback: format.duration →
+    streams[0].duration → tags['DURATION'] (فرمت HH:MM:SS.mmm) — اولین مقدار معتبر برنده است."""
     try:
         info = ffmpeg.probe(media_path)
-        return float(info['format']['duration'])
     except ffmpeg.Error as e:
         stderr = e.stderr.decode('utf-8', errors='ignore') if e.stderr else str(e)
         logger.warning(f"عدم موفقیت ffprobe در تشخیص مدت‌زمان: {stderr.strip().splitlines()[-1] if stderr.strip() else e}")
         return None
-    except (KeyError, ValueError) as e:
-        logger.warning(f"اطلاعات مدت‌زمان در خروجی ffprobe یافت نشد: {e}")
-        return None
     except Exception as e:
         logger.warning(f"خطای غیرمنتظره هنگام بررسی مدت‌زمان فایل: {e}")
         return None
+    # فیکس FB-36: زنجیرهٔ fallback با try/exceptهای جدا؛ اولین مقدار معتبر return می‌شود
+    try:
+        return float(info['format']['duration'])
+    except (KeyError, TypeError, ValueError):
+        pass
+    # فیکس NB-26: پیمایش تمام استریم‌ها به‌جای اتکا به streams[0] — استریم اول ممکن است ویدیو/کانتینر بدون مدت باشد
+    for stream in info.get("streams", []):
+        try:
+            if "duration" in stream and stream["duration"] is not None:
+                return float(stream["duration"])
+        except (KeyError, TypeError, ValueError):
+            pass
+        try:
+            if "tags" in stream and "DURATION" in stream["tags"]:
+                _dur_tag = str(stream["tags"]["DURATION"])  # فیکس FB-36: فرمت HH:MM:SS.mmm
+                _hh, _mm, _ss = _dur_tag.split(":")
+                return int(_hh) * 3600 + int(_mm) * 60 + float(_ss)
+        except (KeyError, TypeError, ValueError, IndexError):
+            pass
+    logger.warning(f"اطلاعات مدت‌زمان در هیچ‌یک از format.duration / streams.duration / tags.DURATION یافت نشد: {os.path.basename(media_path)}")
+    return None
 
 PROGRESS_LOG_INTERVAL_SEC = 30  # فاصلهٔ ثبت پیشرفت رونویسی در لاگ (ثانیه)
 
@@ -387,6 +568,8 @@ class _LoggingTqdm(tqdm.tqdm):
             logger.info(f"پیشرفت رونویسی: {min(100.0, self.n / self.total * 100):.0f}٪")
         return result
 
+_tqdm_struct_warned = False  # هشدار ساختار tqdm در کل سشن فقط یک‌بار چاپ می‌شود (الگوی FB-18)
+
 @contextlib.contextmanager
 def transcribe_progress_logging():
     """جایگزینی موقت tqdm داخل whisper.transcribe با نسخهٔ لاگ‌کننده؛ پس از اتمام همیشه به حالت اولیه برمی‌گردد.
@@ -397,6 +580,7 @@ def transcribe_progress_logging():
     می‌شود و رونویسی بدون لاگ پیشرفت ادامه می‌یابد. سنتل هم تضمین می‌کند اگر attribute
     از ابتدا وجود نداشته باشد، در finally چیزی مثل «tqdm=None» در ماژول باقی نماند.
     """
+    global _tqdm_struct_warned  # هشدار ساختار tqdm در هر سشن فقط یک‌بار (الگوی FB-18)
     import whisper.transcribe as _wt
     _MISSING = object()  # فیکس FB-09: سنتل به‌جای None — تمایز «موجود ولی None» از «غیرموجود»
     original = getattr(_wt, "tqdm", _MISSING)
@@ -404,13 +588,17 @@ def transcribe_progress_logging():
     # فقط وقتی پچ کن که ساختار فعلی همان سبک موردانتظار است؛ در غیر این صورت رونویسی
     # دست‌نخورده و سالم ادامه می‌یابد (رفتار پیشین: پچ کورکورانه = کرش در سبک دیگر)
     if original is _MISSING or not callable(getattr(original, "tqdm", None)):
-        logger.warning("ساختار tqdm در این نسخهٔ whisper موردانتظار (module-style) نیست؛ لاگ پیشرفت رونویسی غیرفعال شد اما خود رونویسی بدون مشکل ادامه می‌یابد.")
+        if not _tqdm_struct_warned:
+            _tqdm_struct_warned = True
+            logger.warning("ساختار tqdm در این نسخهٔ whisper موردانتظار (module-style) نیست؛ لاگ پیشرفت رونویسی غیرفعال شد اما خود رونویسی بدون مشکل ادامه می‌یابد. (این هشدار یک‌بار چاپ می‌شود)")
     else:
         try:
             _wt.tqdm = types.SimpleNamespace(tqdm=_LoggingTqdm)
             patched = True
         except Exception as e:
-            logger.warning(f"فعال‌سازی لاگ پیشرفت رونویسی ممکن نشد (رونویسی بدون آن ادامه می‌یابد): {e}")
+            if not _tqdm_struct_warned:
+                _tqdm_struct_warned = True
+                logger.warning(f"فعال‌سازی لاگ پیشرفت رونویسی ممکن نشد (رونویسی بدون آن ادامه می‌یابد): {e} (این هشدار یک‌بار چاپ می‌شود)")
     try:
         yield
     finally:
@@ -430,7 +618,7 @@ def extract_audio(media_path, base_filename):
     if not media_path.lower().endswith(VIDEO_EXT + AUDIO_EXT):
         raise ValueError(f"فرمت فایل پشتیبانی نمی‌شود: {media_path}")
 
-    safe_name = "".join(c for c in base_filename if c not in '\\/:*?"<>|').strip() or "audio"
+    safe_name = "".join(c for c in base_filename if c not in r'\/:*?"<>|').strip() or "audio"
     audio_path = os.path.join(SESSION_AUDIO_DIR, f"{safe_name}.wav")
     if os.path.exists(audio_path):
         logger.warning("فایل صوتی هم‌نام از قبل در سشن کولب وجود دارد؛ نام جدید تولید می‌شود.")
@@ -438,6 +626,25 @@ def extract_audio(media_path, base_filename):
         while os.path.exists(audio_path):
             audio_path = os.path.join(SESSION_AUDIO_DIR, f"{safe_name}_{counter}.wav")
             counter += 1
+
+    # فیکس FB-33: اگر ورودی از قبل WAV 16kHz مونوی pcm_s16le باشد (دقیقاً همان خروجی
+    # استاندارد این تابع)، transcode تکراری فقط زمان و دیسک سشن هدر می‌دهد؛ فقط کپی محلی.
+    # ⚠️ هرگز media_path اصلی return نمی‌شود — finally آن را حذف می‌کند و فایل ورودی
+    # کاربر از بین می‌رود؛ همیشه کپی در SESSION_AUDIO_DIR ساخته می‌شود.
+    try:
+        if media_path.lower().endswith(".wav"):
+            _probe_info = ffmpeg.probe(media_path)
+            _stream = _probe_info["streams"][0] if _probe_info.get("streams") else {}
+            if (
+                _stream.get("codec_name") == "pcm_s16le"
+                and str(_stream.get("sample_rate")) == "16000"
+                and _stream.get("channels") == 1
+            ):
+                shutil.copy2(media_path, audio_path)
+                logger.step("ورودی از قبل WAV 16kHz مونوی سازگار بود؛ فقط کپی شد (بدون transcode).")  # جزئیات گام‌به‌گام — فقط فایل لاگ
+                return audio_path
+    except Exception:
+        pass  # فیکس FB-33: خطای probe → مسیر عادی transcode ادامه می‌یابد
 
     try:
         (
@@ -460,13 +667,15 @@ def extract_audio(media_path, base_filename):
     return audio_path
 
 def save_all_formats(segments, base_filename, work_dir, media_path, model_label, media_duration, audio_path, file_start):
+    # فیکس NB-24: پاک‌سازی کاراکترهای غیرمجاز فایل‌سیستم در نام خروجی‌ها
+    safe_base = sanitize_filename(base_filename, fallback="media")
     suffix = f"- Whisper [{model_label} Model]"
     names = {
-        'srt': f"{base_filename}{suffix}.srt",
-        'txt': f"{base_filename}{suffix}.txt",
-        'txt_tl': f"{base_filename}{suffix}_timeline.txt",
-        'meta': f"{base_filename}_Metadata.txt",
-        'zip': f"{base_filename}_Whisper_Transcription.zip",
+        'srt': f"{safe_base}{suffix}.srt",
+        'txt': f"{safe_base}{suffix}.txt",
+        'txt_tl': f"{safe_base}{suffix}_timeline.txt",
+        'meta': f"{safe_base}_Metadata.txt",
+        'zip': f"{safe_base}_Whisper_Transcription.zip",
     }
     paths = {k: os.path.join(work_dir, v) for k, v in names.items()}
 
@@ -475,6 +684,8 @@ def save_all_formats(segments, base_filename, work_dir, media_path, model_label,
     # نوشته‌شده شمرده می‌شوند تا آمار متادیتا با فیلتر متن‌خالی سازگار بماند
     total_words = 0
     line_count = 0  # فیکس P4-5: فقط سگمنت‌های دارای متن شمرده می‌شوند
+    timeline_start = None  # فیکس NB-28: شروع اولین سگمنت دارای متن
+    timeline_end = None    # فیکس NB-28: پایان آخرین سگمنت دارای متن
     with open(paths['srt'], 'w', encoding='utf-8') as srt_f, \
           open(paths['txt'], 'w', encoding='utf-8') as txt_f, \
           open(paths['txt_tl'], 'w', encoding='utf-8') as txt_tl_f:
@@ -484,6 +695,9 @@ def save_all_formats(segments, base_filename, work_dir, media_path, model_label,
             if not text:
                 continue
             start_s, end_s = seg['start'], seg['end']
+            if timeline_start is None:
+                timeline_start = start_s  # فیکس NB-28
+            timeline_end = end_s          # فیکس NB-28
             # فیکس FB-02: شماره‌گذاری از enumerate بود و با ردشدن سگمنت خالی، شماره‌ها گسسته
             # و خارج از استاندارد SRT و ناسازگار با line_count متادیتا می‌شد؛ شمارندهٔ مستقل
             # فقط موارد نوشته‌شده را پیوسته شماره‌گذاری می‌کند
@@ -496,8 +710,10 @@ def save_all_formats(segments, base_filename, work_dir, media_path, model_label,
             total_chars += len(text)
             total_words += len(text.split())  # فیکس FB-15: شمارش داخل حلقهٔ فیلترشده
 
-    timeline_start = segments[0]['start'] if segments else 0.0
-    timeline_end = segments[-1]['end'] if segments else 0.0
+    if timeline_start is None:
+        timeline_start = 0.0
+    if timeline_end is None:
+        timeline_end = 0.0
     avg_chars_per_line = (total_chars / line_count) if line_count else 0
     duration_for_report = media_duration if media_duration is not None else timeline_end
 
@@ -516,7 +732,14 @@ def save_all_formats(segments, base_filename, work_dir, media_path, model_label,
         meta_f.write(f"مسیر کامل فایل ورودی: {media_path}\n")
         meta_f.write(f"حجم فایل ورودی: {(f'{source_size_mb:.2f} مگابایت' if source_size_mb is not None else 'نامشخص')}\n")
         meta_f.write(f"حجم فایل صوتی استخراج‌شده: {(f'{audio_size_mb:.2f} مگابایت' if audio_size_mb is not None else 'نامشخص')}\n")
-        meta_f.write(f"مسیر فایل صوتی (فقط داخل سشن کولب - در درایو ذخیره نمی‌شود): {audio_path}\n\n")
+        # فیکس NB-04: فیکس FB-14 فقط ایمیل را درست کرد؛ متادیتای ماندگار (داخل ZIP و درایو)
+        # هم نباید مسیر WAV حذف‌شده را «موجود» جلوه دهد — همان الگوی FB-14 اینجا هم اعمال شد
+        # (statement شرطیِ جدا؛ درج عبارت شرطی داخل بلوک پرانتزی الحاق رشته در پایتون
+        # به‌صورت call روی رشته parse می‌شود و کرش می‌آورد — تجربهٔ فیکس FB-14)
+        if KEEP_SESSION_WAVS:
+            meta_f.write(f"مسیر فایل صوتی (فقط داخل سشن کولب - در درایو ذخیره نمی‌شود): {audio_path}\n\n")
+        else:
+            meta_f.write("فایل WAV سشن پس از پردازش موفق حذف شد (برای ثبت مسیر، KEEP_SESSION_WAVS را در بخش ۲ True کنید).\n\n")
 
         meta_f.write("--- اطلاعات تایم‌لاین ---\n")
         meta_f.write(f"شروع تایم‌لاین: {format_srt_time(timeline_start)}\n")
@@ -536,6 +759,8 @@ def save_all_formats(segments, base_filename, work_dir, media_path, model_label,
         meta_f.write(f"مدل Whisper استفاده‌شده: {model_label}\n")
         meta_f.write(f"دستگاه پردازشی: {device}\n")
         meta_f.write(f"زبان رونویسی: {TRANSCRIBE_LANGUAGE}\n")
+        # فیکس FB-31: پارامترهای کیفی رونویسی برای بازتولیدپذیری ثبت می‌شوند
+        meta_f.write(f"پارامترهای رونویسی: language={TRANSCRIBE_LANGUAGE}, fp16={device == 'cuda'}, condition_on_previous_text=False, verbose=False\n")
         meta_f.write(f"زمان صرف‌شده برای پردازش این فایل: {processing_seconds:.1f} ثانیه\n")
         meta_f.write(f"تاریخ و ساعت پردازش: {time.strftime('%Y-%m-%d %H:%M:%S')}\n\n")
 
@@ -563,7 +788,29 @@ def save_all_formats(segments, base_filename, work_dir, media_path, model_label,
 
 _email_config_warned = False  # فیکس FB-18: هشدار «اطلاعات ایمیل کامل نیست» فقط یک‌بار برای کل سشن چاپ می‌شود
 
+import re  # فیکس NB-27: پشتیبانی از کامای فارسی و سمی‌کالن در جداکننده‌ها
+
+def _recipients():
+    """فیکس NB-05 + NB-27: RECEIVER_EMAIL می‌تواند چند گیرنده با کاما (انگلیسی یا فارسی) یا سمی‌کالن باشد.
+    پارس به لیست آدرس‌های معتبر جهت جلوگیری از خطای SMTP."""
+    if not RECEIVER_EMAIL:
+        return []
+    return [r.strip() for r in re.split(r"[,;،]", RECEIVER_EMAIL) if r.strip()]
+
 def send_email(subject, body, max_retries=3):
+    # فیکس NB-17: Secretها فقط یک‌بار در سلول ۳ خوانده می‌شدند؛ افزودن Secret در میانهٔ سشن
+    # (تلاش مجدد سلول ۵ بدون اجرای دوبارهٔ سلول ۳) بی‌اثر بود. مقدارهای غایب فقط وقتی پیکربندی
+    # ناقص است دوباره خوانده می‌شوند (هزینهٔ userdata.get ناچیز است)
+    global SENDER_EMAIL, SENDER_APP_PASSWORD, RECEIVER_EMAIL
+    if not (SENDER_EMAIL and SENDER_APP_PASSWORD and RECEIVER_EMAIL):
+        if not SENDER_EMAIL:
+            SENDER_EMAIL = get_secret('SENDER_EMAIL')
+        if not SENDER_APP_PASSWORD:
+            SENDER_APP_PASSWORD = get_secret('SENDER_APP_PASSWORD')
+        if not RECEIVER_EMAIL:
+            RECEIVER_EMAIL = get_secret('RECEIVER_EMAIL')
+        if SENDER_EMAIL and SENDER_APP_PASSWORD and RECEIVER_EMAIL:
+            logger.info("تنظیمات ایمیل در میانهٔ اجرا فعال شد.")
     if not (SENDER_EMAIL and SENDER_APP_PASSWORD and RECEIVER_EMAIL):
         # فیکس FB-18: قبلاً این هشدار به‌ازای هر ایمیل (هر فایل + گزارش‌ها) تکرار می‌شد؛
         # فقط بار اول چاپ می‌شود و بقیهٔ ارسال‌ها بی‌هشدار رد می‌شوند
@@ -579,13 +826,14 @@ def send_email(subject, body, max_retries=3):
     # مطابق RFC 2047 امن انکود می‌کند
     msg['Subject'] = Header(subject, 'utf-8')
     msg['From'] = SENDER_EMAIL
-    msg['To'] = RECEIVER_EMAIL
+    # فیکس NB-27: استفاده از لیست گیرندگان معتبر در هدر To با کامای استاندارد
+    msg['To'] = ", ".join(_recipients())
 
     for attempt in range(1, max_retries + 1):
         try:
-            with smtplib.SMTP_SSL('smtp.gmail.com', 465, timeout=30) as server:
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, timeout=30) as server:  # فیکس FB-29
                 server.login(SENDER_EMAIL, SENDER_APP_PASSWORD)
-                server.sendmail(SENDER_EMAIL, [RECEIVER_EMAIL], msg.as_string())
+                server.sendmail(SENDER_EMAIL, _recipients(), msg.as_string())  # فیکس NB-05: لیست پارس‌شدهٔ گیرنده‌ها
             logger.success(f"ایمیل «{subject}» ارسال شد.")
             return True
         except smtplib.SMTPAuthenticationError as e:
@@ -622,8 +870,18 @@ def backup_log_to_drive():
         if os.path.exists(LOG_FILE_PATH):
             dest_dir = os.path.dirname(DRIVE_LOG_PATH)
             os.makedirs(dest_dir, exist_ok=True)
-            dest = os.path.join(dest_dir, f"whisper_processing_log_{time.strftime('%Y%m%d_%H%M%S')}.txt")
+            _ts = time.strftime('%Y%m%d_%H%M%S')
+            dest = os.path.join(dest_dir, f"whisper_processing_log_{_ts}.txt")
             shutil.copy2(LOG_FILE_PATH, dest)
+            # فیکس NB-03: نسخهٔ چرخیدهٔ لاگ (.1 — فیکس FB-13) محتوای قدیمیِ سشن‌های
+            # طولانی است و هرگز به درایو نمی‌رسید؛ با نام part2 جداگانه بکاپ می‌شود
+            # (مقدار برگشتی همان مسیر فایل اصلی می‌ماند تا فراخوان‌ها تغییر نکنند)
+            try:
+                _rotated_log = LOG_FILE_PATH + ".1"
+                if os.path.exists(_rotated_log):
+                    shutil.copy2(_rotated_log, os.path.join(dest_dir, f"whisper_processing_log_{_ts}_part2.txt"))
+            except Exception as e:
+                logger.warning(f"کپی نسخهٔ چرخیدهٔ لاگ (.1) به درایو ناموفق بود: {e}")
             return dest
     except Exception as e:
         logger.warning(f"کپی لاگ به گوگل درایو ناموفق بود: {e}")
@@ -664,9 +922,34 @@ def estimate_eta_seconds(remaining_media_durations, done_records, done_proc_time
         return min(max(rate_based, median_based / 5.0), median_based * 5.0)  # فیکس FB-11: cap در باند ۵ برابر
     return median_based
 
+# فیکس NB-01: وضعیت جاری بچ در سطح ماژول نگه داشته می‌شود تا هنگام توقف کاربر
+# (KeyboardInterrupt) گزارش نتایج تا لحظهٔ توقف و بکاپ لاگ از بیرونِ process_all ممکن باشد
+_batch_state = {"total": 0, "done": 0, "success": 0, "fail": 0, "results": []}
+
+# فیکس NB-12: خطای زیرساختی (دیسک/درایو) — نه خطای محتوایی فایل؛ زیرکلاس RuntimeError
+# تا در هندلر فعلی (ValueError, RuntimeError) بیفتد و re-indent لازم نشود
+class SystemicBatchError(RuntimeError):
+    """خطای زیرساختی (دیسک/درایو) که ادامهٔ بچ را بی‌معنا می‌کند."""
+
+
 def process_all(pairs):
     # فیکس P4-7: اعتبارسنجی ساختار pairs و هشدار لیست خالی پیش از شروع
-    pairs = validate_pairs(pairs)
+    # فیکس NB-06: فراخوان دومِ اعتبارسنجی بی‌پیام است (quiet=True) تا در هر تلاش
+    # مجددِ سلول ۵ هشدارهای تکراری دوباره چاپ نشوند؛ شمارش ردشدگی‌ها (FB-32) انجام می‌شود
+    pairs, _run_rejects = validate_pairs(pairs, quiet=True)
+    # فیکس NB-02: پوشهٔ خروجی نامعتبر/غیرقابل‌نوشتن قبلاً فقط بعد از رونویسی کشف می‌شد
+    # (os.makedirs داخل حلقه) و با خطای آن، خروجی کاملِ آماده در finally با rmtree نابود
+    # می‌شد — قبل از ساختن نسخهٔ بازیابی FB-05. حالا همهٔ پوشه‌های خروجی در شروع بچ
+    # ساخته و write-test می‌شوند و جفت نامعتبر پیش از مصرف GPU رد می‌شود (fail-fast).
+    usable_pairs = []
+    output_rejects = []  # فیکس NB-11: علت‌های ردشدگی پوشهٔ خروجی برای گزارش نهایی
+    for in_path, out_folder in pairs:
+        if not ensure_output_folder(out_folder):
+            logger.warning(f"پوشهٔ خروجی «{out_folder}» قابل ساخت/نوشتن نیست؛ جفت «{os.path.basename(in_path)}» پیش از پردازش رد شد.")
+            output_rejects.append(f"{os.path.basename(in_path)} → پوشهٔ خروجی قابل ساخت/نوشتن نیست: {out_folder}")  # فیکس NB-11
+            continue
+        usable_pairs.append((in_path, out_folder))
+    pairs = usable_pairs
     total = len(pairs)
     results = []
     file_durations = []  # فقط موفق‌ها (مبنای median برای ETA)
@@ -675,16 +958,32 @@ def process_all(pairs):
     success_count = 0
     fail_count = 0
     batch_start = time.time()
+    _batch_state.update(total=total, done=0, success=0, fail=0, results=[])  # فیکس NB-01: ریست وضعیت بچ در شروع هر اجرا
+    consecutive_systemic = 0  # فیکس NB-12: شمارندهٔ شکست سیستمی متوالی (دیسک/درایو)
+    aborted_systemic = False  # فیکس NB-12: توقف زودهنگام بچ به‌علت شکست سیستمی متوالی
 
     if total == 0:
         logger.warning("لیست فایل‌های ورودی خالی است؛ چیزی برای پردازش وجود ندارد. input_output_pairs را تنظیم کنید (یا از build_pairs_from_folder استفاده کنید).")
+        # فیکس NB-15: قبلاً هیچ ایمیلی ارسال نمی‌شد و کاربرِ فقط-ایمیل بی‌خبر می‌ماند؛
+        # حالا یک ایمیل کوتاه با علت‌های ردشدگی ارسال می‌شود (بدون پیکربندی ایمیل، بی‌صدا رد می‌شود)
+        _zero_body = "هیچ جفت معتبری برای پردازش باقی نمانده است.\n\n"
+        _zero_rejects = _run_rejects if _run_rejects else PAIRS_REJECTS
+        # فیکس NB-23: علت‌های ردشدگی شامل پوشهٔ خروجی نامعتبر هم می‌شود تا کاربر گمراه نشود
+        if _zero_rejects:
+            _zero_body += f"علت‌های ردشدگی ساختار/پسوند ({len(_zero_rejects)} مورد؛ حداکثر ۵ مورد):\n"
+            _zero_body += "\n".join(f"  - {_r}" for _r in _zero_rejects[:5]) + "\n"
+        if output_rejects:
+            _zero_body += f"علت‌های ردشدگی پوشهٔ خروجی ({len(output_rejects)} مورد؛ حداکثر ۵ مورد):\n"
+            _zero_body += "\n".join(f"  - {_orj}" for _orj in output_rejects[:5]) + "\n"
+        if not _zero_rejects and not output_rejects:
+            _zero_body += "input_output_pairs را تنظیم کنید (یا از build_pairs_from_folder استفاده کنید).\n"
+        send_email("⚠️ هیچ جفت معتبری برای پردازش نبود", _zero_body)
         return
 
     logger.info(f"====== شروع پردازش {total} فایل ======")
 
-    missing_files = [p for p, _ in pairs if not os.path.exists(p)]
-    if missing_files:
-        logger.warning(f"{len(missing_files)} فایل از {total} فایل ورودی یافت نشد و هنگام پردازش رد خواهند شد.")
+    # فیکس FB-37: چکِ وجودِ ورودی که اینجا تکراری بود حذف شد — precheck سلول ۳ قبل از
+    # شروع اطلاع‌رسانی می‌کند و raise داخل حلقه مرجعِ خطاست (چک extract_audio هم دفاعی می‌ماند)
 
     # فیکس P4-10: مدت رسانهٔ همهٔ فایل‌ها یک‌بار از قبل خوانده می‌شود (ffprobe سریع است) تا ETA بر پایهٔ مدت واقعی باشد
     media_durations = {}
@@ -712,6 +1011,8 @@ def process_all(pairs):
         error_detail = ""
         stats = {}
         duration = 0.0
+        systemic = False  # فیکس NB-12: آیا خطای این فایل زیرساختی بود؟
+        _in_transfer_phase = False  # فیکس NB-12: تا ورود به بخش انتقال، خطاها سیستمی حساب نمی‌شوند
 
         try:
             if not os.path.exists(input_path):
@@ -720,17 +1021,18 @@ def process_all(pairs):
             logger.step("در حال بررسی مدت‌زمان دقیق فایل رسانه...")
             media_duration = media_durations.get(input_path)  # فیکس P4-10: از نتیجهٔ ffprobe پیش از حلقه استفاده می‌شود
             if media_duration is not None:
-                logger.info(f"مدت رسانه: {format_srt_time(media_duration)[:8]}")
+                logger.step(f"مدت رسانه: {format_srt_time(media_duration)[:8]}")  # جزئیات گام‌به‌گام — فقط فایل لاگ
 
             # فیکس P3-4: گارد فضای دیسک سشن قبل از استخراج صدا
             free_gb = shutil.disk_usage(SESSION_AUDIO_DIR).free / (1024 ** 3)  # فیکس FB-03: دیسکِ محل ذخیرهٔ WAV (خارج از Colab هم کار می‌کند)
             if free_gb < 2.0:
-                raise RuntimeError(f"فضای خالی دیسک سشن کولب کمتر از 2 گیگابایت است ({free_gb:.1f} GB)؛ ابتدا فضا آزاد کنید و دوباره تلاش کنید.")
+                # فیکس NB-12: کمبود دیسک خطای زیرساختی است، نه خطای محتوای فایل
+                raise SystemicBatchError(f"فضای خالی دیسک سشن کولب کمتر از 2 گیگابایت است ({free_gb:.1f} GB)؛ ابتدا فضا آزاد کنید و دوباره تلاش کنید.")
             logger.step("در حال استخراج صدا (WAV در سشن کولب ذخیره می‌شود)...")
             audio_path = extract_audio(input_path, base_filename)
-            logger.success(f"صدا استخراج شد و در سشن کولب ذخیره ماند (نه درایو): {audio_path}")
+            logger.step(f"صدا استخراج شد و در سشن کولب ذخیره ماند (نه درایو): {audio_path}")  # فیکس NB-19: جزئیات گام‌به‌گام — فقط فایل لاگ
 
-            logger.step("در حال رونویسی با Whisper (بسته به طول فایل ممکن است چند دقیقه طول بکشد)...")
+            logger.step("در حال رونویسی با Whisper (بسته به طول فایل ممکن است چند دقیقه طول بکشد)...", force=True)  # پیام گامیِ مهم — حتی در حالت کم‌جزئیات چاپ می‌شود
             # فیکس P4-6: پیشرفت رونویسی به‌صورت دوره‌ای در لاگ (و فایل لاگ) ثبت می‌شود
             with transcribe_progress_logging():
                 result = model.transcribe(
@@ -749,13 +1051,14 @@ def process_all(pairs):
             # با فایل بعدی ادامه یابد (ValueError در except مربوطه مدیریت می‌شود).
             if not any(seg.get('text', '').strip() for seg in segments):
                 raise ValueError("هیچ گفتاری شناسایی نشد — متن همهٔ سگمنت‌ها خالی است (احتمالاً فایل سکوت/نویز است).")
-            logger.success(f"رونویسی کامل شد: {len(segments)} لاین شناسایی شد.")
+            logger.step(f"رونویسی کامل شد: {len(segments)} لاین شناسایی شد.")  # فیکس NB-19: جزئیات گام‌به‌گام — فقط فایل لاگ
 
             logger.step("در حال تولید فرمت‌های خروجی (SRT/TXT) و متادیتا...")
             stats = save_all_formats(segments, base_filename, work_dir, input_path,
                                       MODEL_LABEL, media_duration, audio_path,
                                       file_start)  # فیکس FB-17: زمان داخل تابع و در لحظۀ نوشتن متادیتا نهایی می‌شود
 
+            _in_transfer_phase = True  # فیکس NB-12: خطای OSError در بخش انتقال «سیستمی» است (قطع درایو)
             logger.step(f"در حال انتقال فایل‌های خروجی به گوگل درایو: {output_folder}")
             os.makedirs(output_folder, exist_ok=True)
             # فیکس FB-05: انتقال قبلاً ناامن بود — (۱) با شکست انتقال، خروجی‌های آماده در
@@ -773,22 +1076,36 @@ def process_all(pairs):
                     continue
                 if os.path.exists(dest_path):  # فیکس P2-1: اجرای مجدد روی خروجی موجود خطا نمی‌دهد
                     bak_path = dest_path + ".bak"
-                    if os.path.exists(bak_path):
-                        try:
-                            os.remove(bak_path)
-                        except OSError:
-                            pass
-                    os.rename(dest_path, bak_path)  # فیکس FB-05: حذف مستقیم مقصد در صورت خطای move هر دو نسخه را از بین می‌برد
+                    # فیکس FB-34: os.replace اتمیک به‌جای exists/remove/rename — همان race چرخش لاگ
+                    # اینجا هم بود (حذف ناکامل .bak → rename بی‌صدا رد می‌شد)؛ بازنویسی .bak موجود هم امن است
+                    os.replace(dest_path, bak_path)  # فیکس FB-05: حذف مستقیم مقصد در صورت خطای move هر دو نسخه را از بین می‌برد
                     try:
                         shutil.move(src_path, dest_path)
                         os.remove(bak_path)  # انتقال موفق؛ نسخهٔ قدیمی حذف می‌شود
-                        logger.info(f"خروجی قبلی بازنویسی شد: {fname}")
+                        logger.step(f"خروجی قبلی بازنویسی شد: {fname}")  # جزئیات گام‌به‌گام — فقط فایل لاگ
                     except Exception:
-                        os.rename(bak_path, dest_path)  # فیکس FB-05: بازگرداندن نسخهٔ قبلی هنگام خطای انتقال
+                        # فیکس NB-21: اگر shutil.move فایل ناقصی در مقصد ساخته باشد، os.rename با FileExistsError کرش می‌کند؛
+                        # os.replace نسخهٔ پشتیبان .bak را بازمی‌گرداند و خطای اصلی پنهان نمی‌شود
+                        try:
+                            os.replace(bak_path, dest_path)
+                        except OSError:
+                            pass
                         raise
                 else:
-                    shutil.move(src_path, dest_path)
+                    # فیکس NB-09: انتقال بین‌فایل‌سیستم‌ی (سشن → درایو) در واقع
+                    # copy+unlink است؛ اگر copy وسط کار بخورد، فایل نیمه‌کاره با نام
+                    # درست در مقصدِ تازه می‌ماند. فایل ناقص پاک و خطا دوباره raise می‌شود
+                    # (نسخهٔ امن از قبل در پوشهٔ بازیابی FB-05 کپی شده است)
+                    try:
+                        shutil.move(src_path, dest_path)
+                    except Exception:
+                        try:
+                            os.remove(dest_path)
+                        except OSError:
+                            pass
+                        raise
             shutil.rmtree(transfer_recovery_dir, ignore_errors=True)  # فیکس FB-05: انتقال کامل شد؛ نسخهٔ بازیابی این فایل لازم نیست
+            _in_transfer_phase = False  # فیکس NB-12: انتقال تمام شد؛ خطاهای بعدیِ این فایل سیستمی نیست
 
             duration = time.time() - file_start
             file_durations.append(duration)
@@ -806,25 +1123,42 @@ def process_all(pairs):
             logger.error(f"فایل یافت نشد: {e}")
             results.append((input_path, f"ناموفق - فایل یافت نشد ({str(e)[:120]})"))
         except OOM_ERROR_TYPE as e:  # فیکس FB-24
-            duration = time.time() - file_start
-            status, error_detail = "ناموفق", f"کمبود حافظه GPU (Out of Memory) — {type(e).__name__}: {str(e)[:200]}"  # فیکس P3-10
-            fail_count += 1
-            logger.error(f"خطای کمبود حافظه GPU حین پردازش «{base_filename}»؛ این فایل رد شد و پردازش با فایل بعدی ادامه می‌یابد.")
-            try:
-                torch.cuda.empty_cache()
-                logger.info("حافظه CUDA پاک‌سازی شد.")
-            except Exception:
-                pass
-            results.append((input_path, "ناموفق - کمبود حافظه GPU (OOM)"))
+            # فیکس NB-14: روی torch قدیمی (fallback = RuntimeError) این هندلر همهٔ RuntimeErrorها
+            # (خطای ffmpeg، گارد دیسک NB-12 و…) را می‌گرفت و به‌عنوان «کمبود حافظه GPU» گزارش می‌کرد؛
+            # در حالت fallback فقط خطای با نشانهٔ OOM در پیام مسیر OOM را طی می‌کند و بقیه به همان
+            # مسیر عادی هندلر (ValueError, RuntimeError) می‌روند (if/else — نه except جدید)
+            if OOM_FALLBACK_ACTIVE and not ("out of memory" in str(e).lower() or "cuda" in str(e).lower()):
+                duration = time.time() - file_start
+                systemic = isinstance(e, SystemicBatchError)  # فیکس NB-12: خطای زیرساختی (گارد دیسک)
+                status, error_detail = "ناموفق", f"{type(e).__name__}: {str(e)[:200]}"  # فیکس P3-10
+                fail_count += 1
+                logger.error(f"خطا در پردازش فایل: {e}")
+                results.append((input_path, f"ناموفق - {type(e).__name__}: {str(e)[:120]}"))
+            else:
+                duration = time.time() - file_start
+                status, error_detail = "ناموفق", f"کمبود حافظه GPU (Out of Memory) — {type(e).__name__}: {str(e)[:200]}"  # فیکس P3-10
+                fail_count += 1
+                logger.error(f"خطای کمبود حافظه GPU حین پردازش «{base_filename}»؛ این فایل رد شد و پردازش با فایل بعدی ادامه می‌یابد.")
+                try:
+                    torch.cuda.empty_cache()
+                    logger.step("حافظه CUDA پاک‌سازی شد.")  # جزئیات گام‌به‌گام — فقط فایل لاگ
+                except Exception:
+                    pass
+                results.append((input_path, "ناموفق - کمبود حافظه GPU (OOM)"))
         except (ValueError, RuntimeError) as e:
             duration = time.time() - file_start
+            systemic = isinstance(e, SystemicBatchError)  # فیکس NB-12: خطای زیرساختی (گارد دیسک)
             status, error_detail = "ناموفق", f"{type(e).__name__}: {str(e)[:200]}"  # فیکس P3-10
             fail_count += 1
             logger.error(f"خطا در پردازش فایل: {e}")
             results.append((input_path, f"ناموفق - {type(e).__name__}: {str(e)[:120]}"))
         except Exception as e:
             duration = time.time() - file_start
-            status, error_detail = "ناموفق", f"{type(e).__name__}: {str(e)[:200]}"  # فیکس P3-10
+            systemic = _in_transfer_phase and isinstance(e, OSError)  # فیکس NB-12: شکست انتقال به درایو خطای سیستمی است
+            # فیکس FB-30: سه خط آخر traceback به ایمیل افزوده می‌شود تا علت خطای
+            # غیرمنتظره بدون مراجعه به فایل لاگ قابل تشخیص باشد
+            _tb_tail = "\n".join(traceback.format_exc().strip().splitlines()[-3:])
+            status, error_detail = "ناموفق", f"{type(e).__name__}: {str(e)[:200]}\n{_tb_tail}"  # فیکس P3-10 + FB-30
             fail_count += 1
             logger.error(f"خطای غیرمنتظره: {type(e).__name__}: {e} (جزئیات کامل در فایل لاگ ذخیره شد)")
             try:
@@ -846,7 +1180,7 @@ def process_all(pairs):
                     pass
 
         all_file_durations.append(duration)  # فیکس FB-11: زمان همهٔ فایل‌ها (موفق + ناموفق) ثبت می‌شود
-        logger.info(f"خلاصه تا این لحظه: {success_count} موفق، {fail_count} ناموفق از {idx} فایل بررسی‌شده")
+        logger.step(f"خلاصه تا این لحظه: {success_count} موفق، {fail_count} ناموفق از {idx} فایل بررسی‌شده")  # جزئیات گام‌به‌گام — فقط فایل لاگ
 
         # فیکس FB-10: به‌جای ایمیل به‌ازای هر فایل (ریسک rate-limit جیمیل + تأخیر retry
         # در بچ‌های بزرگ)، پیش‌فرض فقط ناموفق‌ها ایمیل می‌شوند؛ گزارش نهایی همیشه ارسال
@@ -874,6 +1208,19 @@ def process_all(pairs):
             per_file_body += f"\nپیشرفت کلی پروژه: {idx}/{total} فایل ({idx/total*100:.0f}٪)\n"
 
             send_email(f"{'✅' if status == 'موفق' else '❌'} گزارش فایل {idx}/{total}: {base_filename}", per_file_body)
+
+        # فیکس NB-01: وضعیت بچ پس از پایان هر فایل به‌روز می‌شود تا گزارش هنگام توقف کاربر دقیق باشد
+        _batch_state.update(success=success_count, fail=fail_count, done=idx, results=list(results))
+        # فیکس NB-12: شمارش شکست سیستمی متوالی — فقط موفقیت ریست می‌کند؛ شکست معمولی (OOM و…) بی‌اثر است
+        if status == "موفق":
+            consecutive_systemic = 0
+        elif systemic:
+            consecutive_systemic += 1
+        # فیکس NB-12: توقف بچ پس از شکست سیستمی متوالی — اینجا (بعد از ایمیل و ثبت وضعیت) می‌شکند
+        if ABORT_AFTER_SYSTEMIC_FAILURES and consecutive_systemic >= ABORT_AFTER_SYSTEMIC_FAILURES:
+            logger.error(f"{consecutive_systemic} شکست سیستمی متوالی (دیسک/درایو)؛ ادامهٔ بچ فقط GPU را هدر می‌دهد — بچ متوقف می‌شود.")
+            aborted_systemic = True
+            break
 
     # فیکس FB-23: empty_cache از پایان هر فایل به پایان بچ منتقل شد — پاک‌سازی
     # به‌ازای هر فایل سربار sync و allocator دارد؛ پس از OOM همچنان بلافاصله در
@@ -903,6 +1250,28 @@ def process_all(pairs):
     if all_file_durations:
         avg_all = sum(all_file_durations) / len(all_file_durations)
         summary_header += f"میانگین زمان پردازش همهٔ فایل‌ها (موفق + ناموفق): {avg_all:.1f} ثانیه\n"
+    # فیکس FB-32: جفت‌های ردشدهٔ اعتبارسنجی در گزارش نهایی هم می‌آیند تا کاربری که فقط
+    # ایمیل نهایی را می‌خواند از کم‌بودنِ تعداد فایل‌ها بی‌خبر نماند. در جریان عادی نوت‌بوک،
+    # ردشدگی‌ها مربوط به precheck سلول ۳ هستند (PAIRS_REJECTS) چون ورودیِ process_all
+    # از قبل فیلتر شده؛ در فراخوان مستقیم با لیست خام، ردشدنی‌های همین اجرا (_run_rejects)
+    # معتبرترند و مقدم می‌شوند
+    _summary_rejects = _run_rejects if _run_rejects else PAIRS_REJECTS
+    if _summary_rejects:
+        summary_header += f"جفت‌های ردشده در اعتبارسنجی: {len(_summary_rejects)}\n"
+        for _rj in _summary_rejects[:5]:
+            summary_header += f"  - {_rj}\n"
+        if len(_summary_rejects) > 5:
+            summary_header += f"  - و {len(_summary_rejects) - 5} مورد دیگر (جزئیات در خروجی سلول ۳)\n"
+    # فیکس NB-12: اگر بچ به‌علت شکست سیستمی متوالی متوقف شد، در گزارش نهایی ذکر می‌شود
+    if aborted_systemic:
+        summary_header += f"⛔ بچ به‌علت {consecutive_systemic} شکست سیستمی متوالی (دیسک/درایو) زودتر از پایان لیست متوقف شد.\n"
+    # فیکس NB-11: ردشدگی‌های پوشهٔ خروجی هم مثل ردشدگی‌های اعتبارسنجی (FB-32) به ایمیل نهایی می‌آیند
+    if output_rejects:
+        summary_header += f"جفت‌های ردشده به‌علت پوشهٔ خروجی نامعتبر: {len(output_rejects)}\n"
+        for _orj in output_rejects[:5]:
+            summary_header += f"  - {_orj}\n"
+        if len(output_rejects) > 5:
+            summary_header += f"  - و {len(output_rejects) - 5} مورد دیگر\n"
     summary_header += f"\n{'-' * 40}\nجزئیات هر فایل:\n{'-' * 40}\n"
     summary = summary_header + "\n".join(f"{os.path.basename(p)}: {s}" for p, s in results)
 
@@ -949,7 +1318,20 @@ try:
     process_all(input_output_pairs)
 except KeyboardInterrupt:
     logger.error("پردازش توسط کاربر متوقف شد.")
-    send_email("⛔ پردازش متوقف شد", "پردازش دسته‌ای توسط کاربر متوقف شد (KeyboardInterrupt).")
+    # فیکس NB-01: قبلاً فقط یک ایمیل ساده فرستاده می‌شد؛ نه بکاپ لاگ به درایو اجرا می‌شد
+    # نه گزارش نتایج تا لحظهٔ توقف — و با پایان سشن همه‌چیز از بین می‌رفت. حالا گزارش
+    # کامل نتایج + بکاپ لاگ + دنبالهٔ لاگ در همان ایمیل توقف ارسال می‌شود
+    _interrupt_backup = backup_log_to_drive()
+    _interrupt_tail = read_log_tail(30)
+    _st = _batch_state
+    _interrupt_body = (
+        f"پردازش دسته‌ای توسط کاربر متوقف شد (KeyboardInterrupt).\n"
+        f"تا لحظهٔ توقف: {_st['success']} موفق | {_st['fail']} ناموفق از {_st['done']} فایل بررسی‌شده (کل لیست: {_st['total']})\n\n"
+    )
+    if _st['results']:
+        _interrupt_body += "جزئیات فایل‌های بررسی‌شده:\n" + "\n".join(f"{os.path.basename(p)}: {s}" for p, s in _st['results']) + "\n\n"
+    _interrupt_body += f"نسخهٔ پشتیبان لاگ: {_interrupt_backup if _interrupt_backup else 'ساخته نشد (متن لاگ فقط داخل سشن است)'}\n\n{'=' * 40}\n{_interrupt_tail}"
+    send_email("⛔ پردازش متوقف شد", _interrupt_body)
 except Exception as e:
     logger.error(f"خطای بحرانی و غیرمنتظره در سطح اصلی برنامه: {e}")
     try:
